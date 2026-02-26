@@ -1,0 +1,3 @@
+[submodule "NeoMind"]
+	path = NeoMind
+	url = https://github.com/mingmingshen/NeoMind.git
