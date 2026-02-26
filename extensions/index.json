@@ -1,17 +1,17 @@
 {
   "version": "1.0",
-  "last_updated": "2025-02-26T12:00:00Z",
+  "last_updated": "2026-02-26T12:00:00Z",
   "extensions": [
     {
       "id": "image-analyzer",
       "name": "Image Analyzer",
       "description": "Object detection and image analysis with dashboard component. Supports JPEG, PNG, and WebP formats.",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "author": "NeoMind",
       "license": "MIT",
       "categories": ["image", "vision", "detection"],
       "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/image-analyzer",
-      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/image-analyzer/manifest.json"
+      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/image-analyzer/metadata.json"
     },
     {
       "id": "weather-forecast",
@@ -22,18 +22,18 @@
       "license": "MIT",
       "categories": ["weather", "data", "wasm", "cross-platform"],
       "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/weather-forecast",
-      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/weather-forecast/manifest.json"
+      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/weather-forecast/metadata.json"
     },
     {
       "id": "yolo-video",
       "name": "YOLO Video Processor",
       "description": "Real-time video stream processing with YOLO object detection. Supports RTSP, RTMP, HLS, Camera, File, and Screen sources.",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "author": "NeoMind",
       "license": "MIT",
       "categories": ["video", "vision", "streaming", "detection"],
       "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/yolo-video",
-      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/yolo-video/manifest.json"
+      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/yolo-video/metadata.json"
     }
   ]
 }
