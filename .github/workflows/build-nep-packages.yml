@@ -160,6 +160,22 @@ jobs:
           # Get version from Cargo.toml
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
 
+          # Create release notes
+          cat > /tmp/release_notes.md << 'EOF'
+          NeoMind Extension Packages (.nep format)
+
+          ## Installation
+
+          ### Via NeoMind Web UI
+          1. Open NeoMind web interface
+          2. Go to Extensions page
+          3. Click Add Extension → Upload File
+          4. Select the .nep package
+
+          ### Via API
+          curl -X POST http://your-neomind-server:9375/api/extensions/upload/file -H 'Content-Type: application/octet-stream' --data-binary @package.nep
+          EOF
+
           # Create or update release
           if gh release view "v$VERSION" &>/dev/null; then
             echo "Release v$VERSION exists, updating assets..."
@@ -167,26 +183,7 @@ jobs:
             echo "Creating release v$VERSION..."
             gh release create "v$VERSION" \
               --title "NeoMind Extensions v$VERSION (.nep packages)" \
-              --notes "NeoMind Extension Packages (.nep format)
-
-## Installation
-
-### Via NeoMind Web UI
-1. Open NeoMind web interface
-2. Go to Extensions page
-3. Click \"Add Extension\" → \"Upload File\"
-4. Select the .nep package
-
-### Via API
-\`\`\`bash
-curl -X POST http://your-neomind-server:9375/api/extensions/upload/file \\
-  -H 'Content-Type: application/octet-stream' \\
-  --data-binary @package.nep
-\`\`\`
-
-## Extensions
-
-"
+              --notes-file /tmp/release_notes.md
           fi
 
           # Upload all .nep packages
