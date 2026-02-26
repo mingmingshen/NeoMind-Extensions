@@ -14,6 +14,7 @@
   ],
   "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/weather-forecast",
   "repository": "https://github.com/camthink-ai/NeoMind-Extensions",
+  "package_url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/weather-forecast-0.1.0/weather-forecast-0.1.0.nep",
   "capabilities": {
     "tools": [
       {
@@ -67,8 +68,7 @@
         "data_type": "Float",
         "unit": "km/h",
         "description": "Wind speed in kilometers per hour",
-        "min": 0.0,
-        "max": null
+        "min": 0.0
       },
       {
         "name": "wind_direction_deg",
@@ -116,6 +116,43 @@
       }
     ]
   },
+  "builds": {
+    "wasm": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/weather-forecast-0.1.0/weather_forecast_wasm.wasm",
+      "sha256": "",
+      "size": 0,
+      "json_url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/weather-forecast-0.1.0/weather_forecast_wasm.json"
+    }
+  },
+  "requirements": {
+    "min_neomind_version": "0.5.0",
+    "network": true,
+    "api_keys": []
+  },
+  "safety": {
+    "timeout_seconds": 30,
+    "max_memory_mb": 50
+  },
+  "config_parameters": [
+    {
+      "name": "city",
+      "display_name": "Default City",
+      "description": "Default city for weather data collection",
+      "type": "string",
+      "default": "Beijing",
+      "required": false
+    },
+    {
+      "name": "collect_interval",
+      "display_name": "Collection Interval",
+      "description": "Data collection interval in seconds (0 to disable auto-collection)",
+      "type": "integer",
+      "default": 300,
+      "min": 0,
+      "max": 86400,
+      "required": false
+    }
+  ],
   "dashboard_components": [
     {
       "type": "weather-card",
@@ -127,44 +164,10 @@
       "export_name": "WeatherCard"
     }
   ],
-  "builds": {
-    "wasm": {
-      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/weather-forecast-0.1.0/weather-forecast-0.1.0.nep",
-      "sha256": "",
-      "size": 0
-    }
-  },
-  "requirements": {
-    "min_neomind_version": "0.5.0",
-    "network": true,
-    "api_keys": []
-  },
   "permissions": [
     "http://geocoding-api.open-meteo.com",
     "https://geocoding-api.open-meteo.com",
     "http://api.open-meteo.com",
     "https://api.open-meteo.com"
-  ],
-  "safety": {
-    "timeout_seconds": 30,
-    "max_memory_mb": 50
-  },
-  "config_parameters": [
-    {
-      "name": "city",
-      "title": "Default City",
-      "description": "Default city for weather data collection",
-      "type": "string",
-      "default": "Beijing"
-    },
-    {
-      "name": "collect_interval",
-      "title": "Collection Interval",
-      "description": "Data collection interval in seconds (0 to disable auto-collection)",
-      "type": "integer",
-      "default": 300,
-      "minimum": 0,
-      "maximum": 86400
-    }
   ]
 }
