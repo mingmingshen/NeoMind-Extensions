@@ -78,61 +78,55 @@ jobs:
           echo "Building $EXT for ${{ matrix.target }}"
           echo "======================================"
 
-          # Set up Cargo workspace
-          cat > Cargo.toml << 'EOF'
-          [workspace]
-          resolver = "2"
-          members = ["extensions/$EXT"]
-          EOF
+          # Create symlinks for neomind-core
+          ln -sf "$(pwd)/neomind/crates/neomind-core" "neomind-core-symlink"
 
-          # Create a local neomind-core dependency
-          ln -sf "$(pwd)/neomind/crates/neomind-core" "neomind-core"
-
-          # Update extension's Cargo.toml to use local neomind-core
           cd "extensions/$EXT"
 
-          # Use [patch.crates-io] to redirect neomind-core dependency
+          # Create .cargo/config.toml for local dependencies
           mkdir -p .cargo
           cat > .cargo/config.toml << EOF
-          [build]
-          target = "${{ matrix.target }}"
-
-          [net]
-          git-fetch-with-cli = true
-
           [patch.crates-io]
-          neomind-core = { path = "../../../neomind-core" }
+          neomind-core = { path = "../../../neomind-core-symlink" }
           EOF
 
-          # Build the extension
           echo "Building $EXT..."
-          cargo build --release --target "${{ matrix.target }}"
+          cargo build --release 2>&1 | tee build.log
+
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "Build failed!"
+            tail -50 build.log
+            exit 1
+          fi
+
+          # Go back to root
+          cd ../..
 
           # Find the built library
-          cd "../../.."
-          LIB_NAME=$(grep -A2 '^\[lib\]' "extensions/$EXT/Cargo.toml" | grep 'name' | head -1 | cut -d'"' -f2 || echo "")
+          LIB_NAME=$(grep -A2 '^\[lib\]' "extensions/$EXT/Cargo.toml" | grep 'name' | head -1 | cut -d'"' -f2 || true)
           if [ -z "$LIB_NAME" ]; then
-            # Try package name
             LIB_NAME=$(grep '^name = ' "extensions/$EXT/Cargo.toml" | cut -d'"' -f2 | tr '-' '_')
           fi
 
           echo "Library name: $LIB_NAME"
 
           # Determine extension based on platform
-          if [[ "${{ matrix.target }}" == *"apple"* ]]; then
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
             EXT_LIB="lib${LIB_NAME}.dylib"
-          elif [[ "${{ matrix.target }}" == *"windows"* ]]; then
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
             EXT_LIB="${LIB_NAME}.dll"
           else
             EXT_LIB="lib${LIB_NAME}.so"
           fi
 
-          # Find the built library
-          BUILT_LIB=$(find "extensions/$EXT/target/${{ matrix.target }}/release" -name "$EXT_LIB" -o -name "${LIB_NAME}.dylib" -o -name "${LIB_NAME}.so" 2>/dev/null | head -1)
+          echo "Looking for: $EXT_LIB"
+
+          # Find the built library (in target/release, not target/<triple>/release)
+          BUILT_LIB=$(find "extensions/$EXT/target/release" -name "$EXT_LIB" 2>/dev/null | head -1)
 
           if [ -z "$BUILT_LIB" ]; then
             echo "Error: Library not found"
-            find "extensions/$EXT/target" -name "*.dylib" -o -name "*.so" -o -name "*.dll" || true
+            find "extensions/$EXT/target" -type f -name "*.dylib" -o -name "*.so" -o -name "*.dll" || true
             exit 1
           fi
 
