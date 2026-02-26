@@ -56,6 +56,7 @@ jobs:
           name: nep-packages-${{ matrix.platform }}
           path: dist/*.nep
           retention-days: 30
+          if-no-files-found: ignore
 
   release:
     needs: build
@@ -67,7 +68,12 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist
+          path: artifacts
+
+      - name: Move artifacts to dist
+        run: |
+          mkdir -p dist
+          find artifacts -name "*.nep" -exec cp {} dist \;
 
       - name: Create Release
         env:
@@ -89,10 +95,20 @@ jobs:
           curl -X POST http://localhost:9375/api/extensions/upload/file -H 'Content-Type: application/octet-stream' --data-binary @package.nep
           EOF
 
-          # Create release
-          gh release create "v$VERSION" \
-            --title "Extension Packages v0.1.0" \
-            --notes-file /tmp/release_notes.md
+          # Create or update release
+          if gh release view "v$VERSION" &>/dev/null; then
+            echo "Release v$VERSION exists, uploading packages..."
+          else
+            echo "Creating release v$VERSION..."
+            gh release create "v$VERSION" \
+              --title "Extension Packages v$VERSION" \
+              --notes-file /tmp/release_notes.md
+          fi
 
           # Upload packages
-          find dist -name "*.nep" -exec gh release upload "v$VERSION" {} \;
+          for nep in dist/*.nep; do
+            [ -f "$nep" ] || continue
+            echo "Uploading: $(basename "$nep")"
+            gh release upload "v$VERSION" "$nep" --clobber
+          done
+          echo "✓ Packages uploaded to release v$VERSION"
