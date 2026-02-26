@@ -6,31 +6,8 @@ on:
     paths:
       - 'extensions/**'
       - 'scripts/package.sh'
-      - '.github/workflows/build-nep-packages.yml'
+      - 'Makefile'
   workflow_dispatch:
-    inputs:
-      extension:
-        description: 'Extension name (build all if empty)'
-        required: false
-        default: ''
-      release:
-        description: 'Create GitHub Release'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      platform:
-        description: 'Build platform (default: current)'
-        required: false
-        default: 'current'
-        type: choice
-        options:
-          - 'current'
-          - 'all'
-          - 'wasm'
-          - 'native'
 
 permissions:
   contents: write
@@ -39,7 +16,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-nep-packages:
+  build:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -48,27 +25,8 @@ jobs:
             platform: linux_amd64
           - os: macos-latest
             platform: darwin_aarch64
-          - os: windows-latest
-            platform: windows_amd64
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install dependencies
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            echo "Installing Windows dependencies..."
-            choco install zip -y
-          else
-            echo "Installing Unix dependencies..."
-            if [ "$RUNNER_OS" = "macOS" ]; then
-              brew install zip jq
-            else
-              sudo apt-get update && sudo apt-get install -y zip jq
-            fi
-          fi
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -76,69 +34,21 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Install wasm32 target
-        if: matrix.platform == 'wasm' || inputs.platform == 'wasm'
-        run: rustup target add wasm32-unknown-unknown
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zip jq
 
-      - name: Get extensions to build
-        id: get_exts
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install zip jq
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: choco install zip -y
+
+      - name: Build packages
         run: |
-          if [ -n "${{ inputs.extension }}" ]; then
-            echo "exts=${{ inputs.extension }}" >> $GITHUB_OUTPUT
-          else
-            if [ "${{ github.event_name }}" = "push" ]; then
-              changed=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} 2>/dev/null || echo "")
-            else
-              changed=""
-            fi
-
-            echo "$changed" | grep '^extensions/' 2>/dev/null | cut -d'/' -f2 | sort -u > /tmp/exts.txt || true
-
-            if [ ! -s /tmp/exts.txt ]; then
-              ls -1 extensions 2>/dev/null > /tmp/exts.txt || true
-            fi
-
-            exts=$(cat /tmp/exts.txt | tr '\n' ' ' | sed 's/ *$//;s/^ *//;s/ *$//')
-            echo "exts=$exts" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build .nep packages
-        env:
-          EXTENSIONS: ${{ steps.get_exts.outputs.exts }}
-          PLATFORM: ${{ inputs.platform || 'current' }}
-        run: |
-          echo "Building .nep packages for: $EXTENSIONS"
-          echo "Platform: $PLATFORM"
-          mkdir -p dist
-
-          # Set platform flag
-          PLATFORM_FLAG=""
-          if [ "$PLATFORM" = "current" ]; then
-            PLATFORM_FLAG="-p ${{ matrix.platform }}"
-          elif [ "$PLATFORM" = "all" ]; then
-            PLATFORM_FLAG="-p all"
-          elif [ "$PLATFORM" = "wasm" ]; then
-            PLATFORM_FLAG="-p wasm"
-          elif [ "$PLATFORM" = "native" ]; then
-            PLATFORM_FLAG="-p ${{ matrix.platform }}"
-          fi
-
-          for ext in $EXTENSIONS; do
-            [ -z "$ext" ] && continue
-
-            ext_dir="extensions/$ext"
-            [ ! -d "$ext_dir" ] && continue
-
-            echo "--- Building .nep package: $ext"
-
-            # Run package.sh script
-            bash scripts/package.sh -d "$ext_dir" $PLATFORM_FLAG -o dist
-
-            # Check if package was created
-            if ls dist/*.nep 2>/dev/null; then
-              echo "  ✓ Package created for $ext"
-            fi
-          done
+          make package-all
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -147,118 +57,42 @@ jobs:
           path: dist/*.nep
           retention-days: 30
 
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
       - name: Create Release
-        if: |
-          github.ref == 'refs/heads/main' &&
-          inputs.release == 'true' &&
-          matrix.platform == 'wasm'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Creating GitHub Release with .nep packages..."
-
-          # Get version from Cargo.toml
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          VERSION="0.1.0"
 
           # Create release notes
           cat > /tmp/release_notes.md << 'EOF'
-          NeoMind Extension Packages (.nep format)
+          NeoMind Extension Packages v0.1.0
+
+          ## Extensions
+          - **image-analyzer** - Object detection and image analysis
+          - **weather-forecast** - Real-time weather data (WASM)
+          - **yolo-video** - Video stream processing with YOLO detection
 
           ## Installation
-
-          ### Via NeoMind Web UI
-          1. Open NeoMind web interface
-          2. Go to Extensions page
-          3. Click Add Extension → Upload File
-          4. Select the .nep package
-
-          ### Via API
-          curl -X POST http://your-neomind-server:9375/api/extensions/upload/file -H 'Content-Type: application/octet-stream' --data-binary @package.nep
+          Via NeoMind Web UI or API:
+          curl -X POST http://localhost:9375/api/extensions/upload/file -H 'Content-Type: application/octet-stream' --data-binary @package.nep
           EOF
 
-          # Create or update release
-          if gh release view "v$VERSION" &>/dev/null; then
-            echo "Release v$VERSION exists, updating assets..."
-          else
-            echo "Creating release v$VERSION..."
-            gh release create "v$VERSION" \
-              --title "NeoMind Extensions v$VERSION (.nep packages)" \
-              --notes-file /tmp/release_notes.md
-          fi
+          # Create release
+          gh release create "v$VERSION" \
+            --title "Extension Packages v0.1.0" \
+            --notes-file /tmp/release_notes.md
 
-          # Upload all .nep packages
-          for nep in dist/*.nep; do
-            [ ! -f "$nep" ] && continue
-            echo "Uploading: $(basename "$nep")"
-            gh release upload "v$VERSION" "$nep" --clobber || true
-          done
-
-          echo "✓ Release v$VERSION updated with packages"
-
-      - name: Upload to dist (for GitHub Pages)
-        if: matrix.platform == 'wasm'
-        run: |
-          # Create gh-pages branch if not exists
-          if ! git show-ref --quiet refs/heads/gh-pages; then
-            git checkout --orphan gh-pages
-            git rm -rf .
-            echo "# NeoMind Extensions" > README.md
-            git add README.md
-            git commit -m "Initial gh-pages branch"
-            git push origin gh-pages
-            git checkout main
-          fi
-
-          # Get version
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-
-          # Create version directory
-          mkdir -p gh-pages/$VERSION
-          cp dist/*.nep gh-pages/$VERSION/ 2>/dev/null || true
-
-          # Update index
-          cd gh-pages
-          ls -1 */*.nep 2>/dev/null | sed 's|/|/|' > packages.txt 2>/dev/null || true
-
-          git add *
-          git commit -m "chore: add $VERSION packages [skip ci]" || echo "No new packages"
-          git push origin gh-pages
-
-  build-summary:
-    needs: build-nep-packages
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Build summary
-        run: |
-          echo "# .nep Package Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Built Packages" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          for dir in nep-packages-*; do
-            if [ -d "$dir" ]; then
-              echo "### $(basename $dir)" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              ls -lh "$dir"/*.nep 2>/dev/null | awk '{print "- " $9 " (" $5 ")"}' >> $GITHUB_STEP_SUMMARY || echo "No packages" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
-
-          # Calculate checksums
-          echo "## SHA256 Checksums" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          for nep in $(find . -name "*.nep" 2>/dev/null); do
-            sha256sum "$nep" | awk '{print $1 "  " $2}' >> $GITHUB_STEP_SUMMARY
-          done
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload summary
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-summary
-          path: $GITHUB_STEP_SUMMARY
+          # Upload packages
+          find dist -name "*.nep" -exec gh release upload "v$VERSION" {} \;
