@@ -16,7 +16,8 @@
 6. [构建和安装](#构建和安装)
 7. [测试](#测试)
 8. [最佳实践](#最佳实践)
-9. [从 V1 迁移](#从-v1-迁移)
+9. [Dashboard 组件（前端）](#dashboard-组件前端)
+10. [从 V1 迁移](#从-v1-迁移)
 
 ---
 
@@ -147,7 +148,36 @@ serde_json = "1.0"
 async-trait = "0.1"
 once_cell = "1.19"   # 用于静态指标/命令
 semver = "1.0"       # 用于版本元数据
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros"] }
 ```
+
+### ⚠️ 关键：Panic 设置
+
+**扩展必须使用 `panic = "unwind"` 编译（不能是 "abort"）**
+
+这是**必需**的，以便主服务器能够安全地捕获扩展的 panic。如果您的扩展使用 `panic = "abort"`，任何 panic 都会立即终止整个 NeoMind 服务器进程！
+
+#### 工作区 Cargo.toml 示例
+
+```toml
+[workspace]
+members = ["extensions/*"]
+
+# 关键：必须与主项目的 panic 设置匹配
+[profile.release]
+opt-level = 3
+lto = "thin"
+panic = "unwind"  # 不是 "abort" - 安全性要求！
+```
+
+#### 为什么这很重要
+
+| 设置 | 行为 | 安全性 |
+|---------|----------|--------|
+| `panic = "unwind"` | Panic 展开栈，可以被捕获 | ✅ 服务器继续运行 |
+| `panic = "abort"` | Panic 立即终止进程 | ❌ 服务器崩溃 |
+
+NeoMind 服务器使用 `std::panic::catch_unwind()` 包装所有 FFI 调用，以隔离扩展 panic。这只有在扩展使用 `panic = "unwind"` 编译时才有效。
 
 ---
 
@@ -431,6 +461,79 @@ cargo build --release
 - Linux: `target/release/libneomind_extension_my_extension.so`
 - Windows: `target/release/neomind_extension_my_extension.dll`
 
+### 跨平台原生编译
+
+原生扩展是平台特定的。要分发到多个平台，需要为每个平台编译：
+
+#### macOS
+
+```bash
+# Apple Silicon (M1/M2/M3)
+cargo build --release --target aarch64-apple-darwin
+
+# Intel Mac
+cargo build --release --target x86_64-apple-darwin
+
+# 通用二进制（两个架构）
+lipo -create \
+  target/aarch64-apple-darwin/release/libneomind_extension_my_extension.dylib \
+  target/x86_64-apple-darwin/release/libneomind_extension_my_extension.dylib \
+  -output target/universal/libneomind_extension_my_extension.dylib
+```
+
+#### Linux
+
+```bash
+# x86_64（最常见）
+cargo build --release --target x86_64-unknown-linux-gnu
+
+# ARM64（树莓派、服务器）
+cargo build --release --target aarch64-unknown-linux-gnu
+
+# 从 macOS 交叉编译（需要 cross）
+cargo install cross
+cross build --release --target x86_64-unknown-linux-gnu
+cross build --release --target aarch64-unknown-linux-gnu
+```
+
+#### Windows
+
+```bash
+# 从 Linux/macOS（需要 cross）
+cross build --release --target x86_64-pc-windows-gnu
+
+# 从 Windows 直接构建
+cargo build --release --target x86_64-pc-windows-msvc
+```
+
+#### 使用 `cross` 进行交叉编译
+
+跨平台编译最简单的方法是使用 `cross`：
+
+```bash
+# 安装 cross
+cargo install cross
+
+# 安装 Docker（cross 需要）
+# macOS: brew install --cask docker
+# Linux: sudo apt install docker.io
+
+# 为所有平台构建
+cross build --release --target x86_64-unknown-linux-gnu
+cross build --release --target aarch64-unknown-linux-gnu
+cross build --release --target x86_64-pc-windows-gnu
+```
+
+#### 交叉编译总结表
+
+| 平台 | 目标三元组 | 交叉编译 | 原生编译 |
+|------|-----------|----------|---------|
+| macOS ARM | `aarch64-apple-darwin` | ❌ | ✅ |
+| macOS Intel | `x86_64-apple-darwin` | ✅ (从 ARM Mac) | ✅ |
+| Linux x86 | `x86_64-unknown-linux-gnu` | ✅ (cross) | ✅ |
+| Linux ARM | `aarch64-unknown-linux-gnu` | ✅ (cross) | ✅ |
+| Windows | `x86_64-pc-windows-gnu` | ✅ (cross) | ✅ |
+
 ### 2. 安装扩展
 
 ```bash
@@ -508,6 +611,24 @@ cargo test
 
 **永远不要让 panic 从扩展中逃逸！**
 
+NeoMind 提供多层安全机制来保护服务器免受扩展错误影响：
+
+```
+┌─────────────────────────────────────────────────────┐
+│ 安全层 1: panic = "unwind" (编译时要求)             │
+├─────────────────────────────────────────────────────┤
+│ 安全层 2: catch_unwind (FFI 调用保护)              │
+├─────────────────────────────────────────────────────┤
+│ 安全层 3: Circuit Breaker (5次失败 → 熔断)         │
+├─────────────────────────────────────────────────────┤
+│ 安全层 4: Panic Tracking (3次panic → 禁用)         │
+├─────────────────────────────────────────────────────┤
+│ 安全层 5: Timeout (30秒命令超时)                    │
+└─────────────────────────────────────────────────────┘
+```
+
+**⚠️ 关键要求：扩展必须使用 `panic = "unwind"`（不是 "abort"）**
+
 ```rust
 async fn execute_command(&self, command: &str, args: &Value) -> Result<Value> {
     // 不好：unwrap() 会 panic
@@ -521,7 +642,44 @@ async fn execute_command(&self, command: &str, args: &Value) -> Result<Value> {
 }
 ```
 
-### 2. 线程安全
+### 2. HTTP 客户端选择
+
+**重要**：在原生扩展中进行 HTTP 请求时：
+
+- **使用 `ureq`**（阻塞客户端）用于简单的 HTTP 调用
+- **避免使用 `reqwest`**，因为它会带来 Tokio 运行时依赖
+
+```toml
+# 推荐：ureq（阻塞、轻量级）
+[dependencies]
+ureq = { version = "2.9", features = ["json"] }
+
+# 不推荐用于扩展：reqwest（会带来 Tokio 运行时）
+# reqwest = { version = "0.11", features = ["json"] }
+```
+
+```rust
+// 示例：使用 ureq 进行 HTTP 调用
+fn fetch_data(&self, url: &str) -> Result<MyData> {
+    let response = ureq::get(url)
+        .call()
+        .map_err(|e| ExtensionError::ExecutionFailed(format!("HTTP 错误: {}", e)))?;
+
+    let data: MyData = response
+        .into_json()
+        .map_err(|e| ExtensionError::Serialization(format!("JSON 错误: {}", e)))?;
+
+    Ok(data)
+}
+```
+
+**为什么选择 ureq？**
+- 没有 Tokio 运行时依赖（避免与宿主冲突）
+- 更简单的 FFI 边界
+- 更小的二进制大小
+- 在阻塞上下文中工作良好
+
+### 3. 线程安全
 
 扩展可能被并发调用。使用适当的同步：
 
@@ -533,7 +691,7 @@ pub struct MyExtension {
 }
 ```
 
-### 3. 静态指标/命令
+### 4. 静态指标/命令
 
 始终使用 `once_cell::sync::Lazy` 来定义指标和命令：
 
@@ -623,7 +781,100 @@ cat ~/NeoMind-Extension/extensions/weather-forecast/src/lib.rs
 
 WASM 扩展提供跨平台兼容性，单个构建工件即可。它们在使用 Wasmtime 的沙箱环境中运行。
 
-### 项目结构
+### WASM 目标系统
+
+NeoMind 支持多种 WASM 目标，适用于不同用例：
+
+| 目标 | 描述 | 用例 |
+|------|------|------|
+| `wasm32-wasi` | WASI（WebAssembly 系统接口） | **推荐** - 完整系统访问、文件 I/O、网络 |
+| `wasm32-unknown-unknown` | 纯 WebAssembly | 仅浏览器，无系统访问 |
+
+> **注意**：NeoMind 主要使用 `wasm32-wasi` 作为扩展，因为它提供了物联网和自动化所需的系统级功能。
+
+### 安装 WASM 目标
+
+```bash
+# 安装 WASI 目标（推荐）
+rustup target add wasm32-wasi
+
+# 安装纯 WebAssembly 目标（可选）
+rustup target add wasm32-unknown-unknown
+
+# 验证安装
+rustup target list --installed | grep wasm
+```
+
+### 跨平台 WASM 编译
+
+WASM 的主要优势之一是 **一次编写，到处运行**。单个 `.wasm` 文件可在以下平台运行：
+- macOS（Apple Silicon 和 Intel）
+- Linux（x86_64 和 ARM64）
+- Windows（x86_64）
+- Web 浏览器
+
+```bash
+# 构建 WASM 扩展（适用于所有平台！）
+cargo build --release --target wasm32-wasi
+
+# 输出：target/wasm32-wasi/release/my_extension.wasm
+```
+
+### WASM 构建配置
+
+#### WASM 的 Cargo.toml
+
+```toml
+[package]
+name = "my-wasm-extension"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]  # WASM 必需
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# 可选：WASM 特定优化
+[profile.release]
+opt-level = "z"      # 优化大小
+lto = true           # 链接时优化
+codegen-units = 1    # 更好的优化
+panic = "abort"      # 更小的二进制文件（WASM 不支持展开）
+strip = true         # 剥离符号
+```
+
+#### WASM 的 .cargo/config.toml
+
+创建 `.cargo/config.toml` 进行 WASM 特定设置：
+
+```toml
+[target.wasm32-wasi]
+# 如果安装了 WASI SDK（可选，用于更好的优化）
+# rustflags = ["-C", "linker=clang"]
+
+[build]
+# 此扩展的默认目标
+# target = "wasm32-wasi"
+```
+
+### WASI 系统接口
+
+WASI（WebAssembly 系统接口）提供对系统资源的访问：
+
+| 功能 | WASI 支持 | 说明 |
+|------|-----------|------|
+| 文件 I/O | ✅ 完整 | 在沙箱目录中读写文件 |
+| 网络 | ✅ 部分 | 通过宿主 API 的 HTTP 客户端 |
+| 环境变量 | ✅ 完整 | 读取环境变量 |
+| 参数 | ✅ 完整 | 命令行参数 |
+| 随机数 | ✅ 完整 | 加密安全随机数生成器 |
+| 时钟 | ✅ 完整 | 系统时间访问 |
+| 线程 | ⚠️ 有限 | 某些运行时中为实验性功能 |
+
+### WASM 扩展结构
 
 ```
 my-wasm-extension/
@@ -832,6 +1083,91 @@ cp my-extension.json ~/.neomind/extensions/
 3. **使用 JSON 作为响应**：沙箱处理 JSON 序列化
 4. **在目标平台上测试**：WASM 行为可能与原生不同
 5. **提供良好的元数据**：JSON 文件是主要文档
+
+### WASM 主机 API
+
+WASM 扩展可以通过 NeoMind 沙箱提供的主机函数访问外部资源。当前支持：
+
+| 主机函数 | 描述 | 参数 | 返回值 |
+|---------|------|------|--------|
+| `host_http_request` | 发起 HTTP 请求 | method, url | response JSON |
+
+#### 从 WASM 发起 HTTP 请求
+
+WASM 扩展可以使用 `host_http_request` 主机函数发起 HTTP 请求：
+
+```rust
+// 导入主机函数
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn host_http_request(
+        method_ptr: *const u8,
+        method_len: i32,
+        url_ptr: *const u8,
+        url_len: i32,
+        result_ptr: *mut u8,
+        result_max_len: i32,
+    ) -> i32;
+}
+
+// 辅助函数：发起 HTTP GET 请求
+fn http_get(url: &str) -> Result<String, String> {
+    let method = b"GET";
+    let url_bytes = url.as_bytes();
+    let mut result_buffer = vec![0u8; 65536]; // 64KB 缓冲区
+
+    let result_len = unsafe {
+        host_http_request(
+            method.as_ptr(),
+            method.len() as i32,
+            url_bytes.as_ptr(),
+            url_bytes.len() as i32,
+            result_buffer.as_mut_ptr(),
+            result_buffer.len() as i32,
+        )
+    };
+
+    if result_len < 0 {
+        return Err("HTTP 请求失败".to_string());
+    }
+
+    // 查找空终止符
+    let end = result_buffer.iter().position(|&b| b == 0).unwrap_or(result_len as usize);
+    String::from_utf8(result_buffer[..end].to_vec())
+        .map_err(|e| format!("无效的 UTF-8 响应: {}", e))
+}
+```
+
+#### 声明权限
+
+发起 HTTP 请求的扩展必须在其 manifest 中声明允许的 URL：
+
+```json
+{
+  "id": "my.extension",
+  "permissions": [
+    "https://api.example.com",
+    "https://geocoding-api.open-meteo.com",
+    "https://api.open-meteo.com"
+  ]
+}
+```
+
+### 示例：天气预报 WASM 扩展
+
+参见 `extensions/weather-forecast-wasm/` 获取完整的 WASM 扩展示例，它：
+- 使用 HTTP 主机 API 获取天气数据
+- 调用 Open-Meteo 的免费地理编码和天气 API
+- 演示 WASM 中的正确错误处理
+- 展示如何解析 JSON 响应
+
+```bash
+# 构建 WASM 扩展
+cd extensions/weather-forecast-wasm
+cargo build --target wasm32-unknown-unknown --release
+
+# 输出: weather_forecast_wasm.wasm (~170 KB)
+```
 
 ### 示例：wasm-hello 扩展（Rust）
 
@@ -1058,6 +1394,362 @@ cat ~/NeoMind-Extension/extensions/as-hello/metadata.json
 | 扩展加载但命令失败 | 检查函数名称完全匹配（区分大小写） |
 | JSON 元数据未识别 | 验证 JSON 有效且匹配架构 |
 | 指标未显示 | 确保 JSON 中的 `data_type` 有效（`integer`、`float`、`string`、`boolean`） |
+
+---
+
+## Dashboard 组件（前端）
+
+扩展可以提供自定义的 **Dashboard 组件**，在 NeoMind Web UI 中渲染。这些是基于 React 的组件，打包为 IIFE（立即调用函数表达式）模块。
+
+### 概述
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    NeoMind Dashboard                     │
+├─────────────────────────────────────────────────────────┤
+│  组件库                                                  │
+│  ├─ 内置组件（仪表盘、图表、状态等）                     │
+│  └─ 扩展组件（动态加载）                                 │
+├─────────────────────────────────────────────────────────┤
+│  扩展组件加载                                            │
+│  ├─ manifest.json 定义 dashboard_components             │
+│  ├─ 前端包通过脚本注入加载                               │
+│  └─ 组件使用配置中的 props 渲染                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 项目结构
+
+```
+my-extension/
+├── Cargo.toml                    # Rust 后端
+├── src/lib.rs                    # 扩展实现
+├── manifest.json                 # 扩展元数据 + dashboard 组件
+└── frontend/                     # 前端 dashboard 组件
+    ├── package.json              # npm 依赖
+    ├── vite.config.ts            # Vite 构建配置
+    └── src/
+        └── index.tsx             # React 组件
+```
+
+### 1. manifest.json 配置
+
+在 `manifest.json` 中添加 `dashboard_components` 数组：
+
+```json
+{
+  "id": "my.extension",
+  "name": "我的扩展",
+  "version": "0.1.0",
+  "main": "libneomind_extension_my_extension.dylib",
+  "dashboard_components": [
+    {
+      "type": "my-component",
+      "name": "我的组件",
+      "description": "自定义 dashboard 组件",
+      "category": "custom",
+      "icon": "Activity",
+      "bundle_path": "/frontend/dist/my-dashboard-components.js",
+      "export_name": "MyComponent",
+      "size_constraints": {
+        "min_w": 2,
+        "min_h": 2,
+        "default_w": 4,
+        "default_h": 4,
+        "max_w": 8,
+        "max_h": 6
+      },
+      "has_data_source": true,
+      "has_display_config": true,
+      "has_actions": false,
+      "max_data_sources": 1,
+      "config_schema": {
+        "type": "object",
+        "properties": {
+          "refreshInterval": {
+            "type": "number",
+            "description": "自动刷新间隔（毫秒）",
+            "default": 30000,
+            "minimum": 0,
+            "maximum": 3600000
+          },
+          "showDetails": {
+            "type": "boolean",
+            "description": "显示详细信息",
+            "default": true
+          }
+        }
+      },
+      "default_config": {
+        "refreshInterval": 30000,
+        "showDetails": true
+      }
+    }
+  ]
+}
+```
+
+### 2. 前端组件实现
+
+在 `frontend/src/index.tsx` 中创建 React 组件：
+
+```tsx
+/**
+ * 我的扩展 Dashboard 组件
+ */
+import { forwardRef, useEffect, useState, useCallback } from 'react'
+
+// 数据源接口（由 dashboard 提供）
+export interface DataSource {
+  type: string
+  extensionId?: string
+  [key: string]: any
+}
+
+// 组件 props 接口
+export interface MyComponentProps {
+  title?: string
+  dataSource?: DataSource
+  className?: string
+  editMode?: boolean
+  // 从 config_schema 来的配置 props
+  refreshInterval?: number
+  showDetails?: boolean
+}
+
+// 扩展 ID 用于 API 调用
+const EXTENSION_ID = 'my.extension'
+
+export const MyComponent = forwardRef<HTMLDivElement, MyComponentProps>(
+  function MyComponent(props, ref) {
+    const {
+      title = '我的组件',
+      dataSource,
+      className = '',
+      refreshInterval = 30000,
+      showDetails = true
+    } = props
+
+    const [data, setData] = useState<any>(null)
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+
+    const extensionId = dataSource?.extensionId || EXTENSION_ID
+
+    // 从扩展获取数据
+    const fetchData = useCallback(async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const response = await fetch(`/api/extensions/${extensionId}/command`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            command: 'get_data',
+            args: {}
+          })
+        })
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
+        const result = await response.json()
+        if (result.success && result.data) {
+          setData(result.data)
+        } else {
+          throw new Error(result.error || '获取数据失败')
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '未知错误')
+      } finally {
+        setLoading(false)
+      }
+    }, [extensionId])
+
+    // 初始获取和自动刷新
+    useEffect(() => {
+      fetchData()
+      if (refreshInterval > 0) {
+        const interval = setInterval(fetchData, refreshInterval)
+        return () => clearInterval(interval)
+      }
+    }, [fetchData, refreshInterval])
+
+    return (
+      <div ref={ref} className={`p-4 bg-white rounded-lg shadow ${className}`}>
+        <h3 className="text-lg font-semibold mb-2">{title}</h3>
+
+        {loading && !data && (
+          <div className="text-gray-500">加载中...</div>
+        )}
+
+        {error && (
+          <div className="text-red-500">错误: {error}</div>
+        )}
+
+        {data && (
+          <div>
+            {/* 在此渲染您的数据 */}
+            <pre>{JSON.stringify(data, null, 2)}</pre>
+          </div>
+        )}
+      </div>
+    )
+  }
+)
+
+MyComponent.displayName = 'MyComponent'
+
+// 为 IIFE 兼容性导出默认
+export default { MyComponent }
+```
+
+### 3. package.json 配置
+
+```json
+{
+  "name": "my-dashboard-components",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.11"
+  }
+}
+```
+
+### 4. vite.config.ts 配置
+
+**关键**：组件必须构建为 IIFE 包，并将 React 外部化：
+
+```typescript
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [
+    react({
+      // 使用经典 JSX 运行时以避免 jsx-runtime 依赖
+      jsxRuntime: 'classic'
+    })
+  ],
+  define: {
+    // 替换 process.env.NODE_ENV 以避免 "process is not defined" 错误
+    'process.env.NODE_ENV': JSON.stringify('production')
+  },
+  build: {
+    lib: {
+      entry: './src/index.tsx',
+      name: 'MyDashboardComponents',  // 全局变量名
+      fileName: () => `my-dashboard-components.js`,
+      formats: ['iife']  // IIFE 分配到全局变量
+    },
+    rollupOptions: {
+      // 外部化 React 以使用宿主应用的 React
+      external: ['react', 'react-dom'],
+      output: {
+        // 使用 'named' 导出以获得命名导出可用性
+        exports: 'named',
+        // 为外部依赖提供全局变量
+        globals: {
+          'react': 'React',
+          'react-dom': 'ReactDOM'
+        }
+      }
+    }
+  }
+})
+```
+
+### 5. 构建和安装
+
+```bash
+# 构建 Rust 后端
+cd ~/NeoMind-Extension/extensions/my-extension
+cargo build --release
+
+# 构建前端组件
+cd frontend
+npm install
+npm run build
+
+# 安装扩展
+mkdir -p ~/.neomind/extensions/my-extension
+cp ../target/release/libneomind_extension_my_extension.dylib ~/.neomind/extensions/
+cp manifest.json ~/.neomind/extensions/my-extension/
+cp -r dist ~/.neomind/extensions/my-extension/frontend/
+
+# 重启 NeoMind
+```
+
+### 组件 Props 参考
+
+扩展组件从 dashboard 接收这些 props：
+
+| Prop | 类型 | 描述 |
+|------|------|------|
+| `title` | `string?` | 从 dashboard 配置来的组件标题 |
+| `dataSource` | `DataSource?` | 数据源绑定配置 |
+| `className` | `string?` | 额外的 CSS 类 |
+| `editMode` | `boolean?` | Dashboard 处于编辑模式时为 true |
+| `...config` | `any` | 来自 `config_schema` 属性的 props |
+
+### 全局变量命名约定
+
+前端加载器将组件类型映射到全局变量名：
+
+| 组件类型 | 全局变量名 |
+|----------------|---------------------|
+| `weather-card` | `WeatherDashboardComponents` |
+| `image-analyzer` | `ImageAnalyzerDashboardComponents` |
+| `yolo-video-display` | `YoloVideoDashboardComponents` |
+| 自定义（`my-component`） | `MyDashboardComponents` |
+
+**约定**：`{PascalCase(component-type)}DashboardComponents`
+
+### 完整示例：天气卡片
+
+参见 `extensions/weather-forecast/` 获取完整的工作示例：
+
+```
+weather-forecast/
+├── Cargo.toml
+├── manifest.json                 # 定义 weather-card 组件
+├── src/lib.rs                    # 带有 get_weather 命令的 Rust 后端
+└── frontend/
+    ├── package.json
+    ├── vite.config.ts
+    └── src/
+        └── index.tsx             # WeatherCard React 组件
+```
+
+展示的功能：
+- 基于天气条件的美丽渐变背景
+- 带可编辑输入的城市搜索
+- 自动刷新功能
+- 温度单位选择
+- 响应式加载和错误状态
+
+### Dashboard 组件最佳实践
+
+1. **使用 TypeScript** 获得类型安全和更好的 IDE 支持
+2. **外部化 React** 以避免包大小膨胀和版本冲突
+3. **优雅处理加载/错误状态**
+4. **支持自动刷新** 具有可配置的间隔
+5. **使用 Tailwind CSS** 进行样式设计（匹配 NeoMind UI）
+6. **保持组件小** - 将复杂 UI 拆分为多个组件
+7. **在 Tauri 和 web 环境中测试**
 
 ---
 

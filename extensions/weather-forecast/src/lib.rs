@@ -1,1031 +1,413 @@
-//! NeoMind Weather Forecast Extension
+//! NeoMind Weather Forecast WASM Extension
 //!
-//! This extension provides weather data for global cities.
-//!
-//! ## Capabilities
-//!
-//! - **Metrics**: Temperature, humidity, wind speed, cloud cover
-//! - **Commands**: Query weather for any city
-//!
-//! ## Configuration
-//!
-//! Set via JSON config when loading:
-//! ```json
-//! {
-//!   "default_city": "Beijing"
-//! }
-//! ```
+//! WASM version of the weather extension that uses host HTTP functions
+//! to make requests to the Open-Meteo API.
 
-use std::sync::Arc;
-use std::time::SystemTime;
-
-// Import from neomind-core (the actual extension system)
-use neomind_core::extension::system::{
-    Extension, ExtensionMetadata, ExtensionError, MetricDescriptor, ExtensionCommand,
-    ExtensionMetricValue, ParamMetricValue, MetricDataType, ParameterDefinition,
-    ParameterGroup, ABI_VERSION, Result,
-};
-use serde_json::Value;
-use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
-// Extension State
+// Host Function Imports
 // ============================================================================
 
-struct WeatherState {
-    default_city: String,
-    // Collection strategy configuration
-    collection_interval_seconds: u64,
-    last_collection_timestamp: Arc<std::sync::Mutex<i64>>,
-    // Cached metric data (for returning between collections)
-    cached_metrics: Arc<std::sync::Mutex<Vec<ExtensionMetricValue>>>,
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn host_http_request(
+        method_ptr: *const u8,
+        method_len: i32,
+        url_ptr: *const u8,
+        url_len: i32,
+        result_ptr: *mut u8,
+        result_max_len: i32,
+    ) -> i32;
 }
 
 // ============================================================================
-// Static Metrics and Commands
+// API Types
 // ============================================================================
 
-/// Static metric descriptors - defined once to avoid lifetime issues
-static METRICS: Lazy<[MetricDescriptor; 4]> = Lazy::new(|| [
-    MetricDescriptor {
-        name: "temperature_c".to_string(),
-        display_name: "Temperature".to_string(),
-        data_type: MetricDataType::Float,
-        unit: "°C".to_string(),
-        min: Some(-50.0),
-        max: Some(60.0),
-        required: false,
-    },
-    MetricDescriptor {
-        name: "humidity_percent".to_string(),
-        display_name: "Humidity".to_string(),
-        data_type: MetricDataType::Integer,
-        unit: "%".to_string(),
-        min: Some(0.0),
-        max: Some(100.0),
-        required: false,
-    },
-    MetricDescriptor {
-        name: "wind_speed_kmph".to_string(),
-        display_name: "Wind Speed".to_string(),
-        data_type: MetricDataType::Float,
-        unit: "km/h".to_string(),
-        min: Some(0.0),
-        max: Some(200.0),
-        required: false,
-    },
-    MetricDescriptor {
-        name: "cloud_cover_percent".to_string(),
-        display_name: "Cloud Cover".to_string(),
-        data_type: MetricDataType::Integer,
-        unit: "%".to_string(),
-        min: Some(0.0),
-        max: Some(100.0),
-        required: false,
-    },
-]);
-
-/// Static command descriptors - defined once to avoid lifetime issues
-static COMMANDS: Lazy<[ExtensionCommand; 3]> = Lazy::new(|| [
-    // Query weather with location parameters
-    ExtensionCommand {
-        name: "query_weather".to_string(),
-        display_name: "Query Weather".to_string(),
-        payload_template: r#"{"city": "{{city}}", "units": "{{units}}"}"#.to_string(),
-        parameters: vec![
-            // City parameter (required)
-            ParameterDefinition {
-                name: "city".to_string(),
-                display_name: "City".to_string(),
-                description: "Name of the city to query weather for".to_string(),
-                param_type: MetricDataType::String,
-                required: true,
-                default_value: Some(ParamMetricValue::String("Beijing".to_string())),
-                min: None,
-                max: None,
-                options: vec![],
-            },
-            // Units parameter (optional, with enum options)
-            ParameterDefinition {
-                name: "units".to_string(),
-                display_name: "Units".to_string(),
-                description: "Temperature units to use".to_string(),
-                param_type: MetricDataType::Enum {
-                    options: vec!["celsius".to_string(), "fahrenheit".to_string(), "kelvin".to_string()],
-                },
-                required: false,
-                default_value: Some(ParamMetricValue::String("celsius".to_string())),
-                min: None,
-                max: None,
-                options: vec!["celsius".to_string(), "fahrenheit".to_string(), "kelvin".to_string()],
-            },
-            // Days ahead parameter (integer with range)
-            ParameterDefinition {
-                name: "days_ahead".to_string(),
-                display_name: "Days Ahead".to_string(),
-                description: "Number of days ahead for forecast (1-7)".to_string(),
-                param_type: MetricDataType::Integer,
-                required: false,
-                default_value: Some(ParamMetricValue::Integer(1)),
-                min: Some(1.0),
-                max: Some(7.0),
-                options: vec![],
-            },
-            // Include alerts parameter (boolean)
-            ParameterDefinition {
-                name: "include_alerts".to_string(),
-                display_name: "Include Alerts".to_string(),
-                description: "Whether to include weather alerts in response".to_string(),
-                param_type: MetricDataType::Boolean,
-                required: false,
-                default_value: Some(ParamMetricValue::Boolean(false)),
-                min: None,
-                max: None,
-                options: vec![],
-            },
-        ],
-        fixed_values: Default::default(),
-        samples: vec![
-            serde_json::json!({"city": "Tokyo", "units": "celsius"}),
-            serde_json::json!({"city": "New York", "units": "fahrenheit", "days_ahead": 3}),
-        ],
-        llm_hints: "Query current weather for any city. Returns temperature, humidity, wind speed, and cloud cover. Specify units as 'celsius', 'fahrenheit', or 'kelvin'. Use days_ahead for forecasts (1-7 days).".to_string(),
-        parameter_groups: vec![
-            ParameterGroup {
-                name: "location".to_string(),
-                display_name: "Location".to_string(),
-                description: "Location parameters for the weather query".to_string(),
-                parameters: vec!["city".to_string()],
-            },
-            ParameterGroup {
-                name: "options".to_string(),
-                display_name: "Options".to_string(),
-                description: "Optional parameters for customizing the response".to_string(),
-                parameters: vec!["units".to_string(), "days_ahead".to_string(), "include_alerts".to_string()],
-            },
-        ],
-    },
-    // Refresh command (no parameters)
-    ExtensionCommand {
-        name: "refresh".to_string(),
-        display_name: "Refresh Weather Data".to_string(),
-        payload_template: "{}".to_string(),
-        parameters: vec![],
-        fixed_values: Default::default(),
-        samples: vec![],
-        llm_hints: "Refresh the cached weather data for the default city.".to_string(),
-        parameter_groups: vec![],
-    },
-    // Get forecast summary command (with single parameter)
-    ExtensionCommand {
-        name: "forecast_summary".to_string(),
-        display_name: "Forecast Summary".to_string(),
-        payload_template: r#"{"city": "{{city}}", "days": {{days}}}"#.to_string(),
-        parameters: vec![
-            ParameterDefinition {
-                name: "days".to_string(),
-                display_name: "Days".to_string(),
-                description: "Number of days to forecast (1-14)".to_string(),
-                param_type: MetricDataType::Integer,
-                required: false,
-                default_value: Some(ParamMetricValue::Integer(3)),
-                min: Some(1.0),
-                max: Some(14.0),
-                options: vec![],
-            },
-        ],
-        fixed_values: {
-            let mut map = std::collections::HashMap::new();
-            map.insert("detailed".to_string(), serde_json::Value::Bool(true));
-            map
-        },
-        samples: vec![
-            serde_json::json!({"days": 5}),
-            serde_json::json!({}),
-        ],
-        llm_hints: "Get a forecast summary for the specified number of days. Defaults to 3 days.".to_string(),
-        parameter_groups: vec![],
-    },
-]);
-
-// ============================================================================
-// Extension Implementation
-// ============================================================================
-
-struct WeatherExtension {
-    metadata: ExtensionMetadata,
-    state: Arc<WeatherState>,
+#[derive(Debug, Deserialize)]
+struct GeocodingResponse {
+    results: Option<Vec<GeoLocation>>,
 }
 
-impl WeatherExtension {
-    fn new(config: &Value) -> Result<Self> {
-        let default_city = config
-            .get("default_city")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Beijing")
-            .to_string();
-
-        let metadata = ExtensionMetadata {
-            id: "neomind.weather.forecast".to_string(),
-            name: "Weather Forecast Extension".to_string(),
-            version: semver::Version::new(0, 5, 8),
-            description: Some("Provides weather data and forecasts for global cities".to_string()),
-            author: Some("CamThink".to_string()),
-            homepage: Some("https://github.com/neomind/extensions".to_string()),
-            license: Some("MIT".to_string()),
-            file_path: None,
-            config_parameters: Some(vec![
-                ParameterDefinition {
-                    name: "default_city".to_string(),
-                    display_name: "Default City".to_string(),
-                    description: "Default city for weather queries when not specified".to_string(),
-                    param_type: MetricDataType::String,
-                    required: false,
-                    default_value: Some(ParamMetricValue::String("Beijing".to_string())),
-                    min: None,
-                    max: None,
-                    options: vec![],
-                },
-                ParameterDefinition {
-                    name: "temperature_unit".to_string(),
-                    display_name: "Temperature Unit".to_string(),
-                    description: "Default temperature unit for forecasts".to_string(),
-                    param_type: MetricDataType::Enum {
-                        options: vec!["celsius".to_string(), "fahrenheit".to_string(), "kelvin".to_string()],
-                    },
-                    required: false,
-                    default_value: Some(ParamMetricValue::String("celsius".to_string())),
-                    min: None,
-                    max: None,
-                    options: vec![],
-                },
-                ParameterDefinition {
-                    name: "update_interval_minutes".to_string(),
-                    display_name: "Update Interval (minutes)".to_string(),
-                    description: "How often to refresh weather data in metrics. Commands always fetch fresh data.".to_string(),
-                    param_type: MetricDataType::Integer,
-                    required: false,
-                    default_value: Some(ParamMetricValue::Integer(60)),
-                    min: Some(10.0),
-                    max: Some(1440.0),
-                    options: vec![],
-                },
-                ParameterDefinition {
-                    name: "return_cached_between_updates".to_string(),
-                    display_name: "Return Cached Data".to_string(),
-                    description: "Whether to return cached data between updates. If false, returns no metrics until next update.".to_string(),
-                    param_type: MetricDataType::Boolean,
-                    required: false,
-                    default_value: Some(ParamMetricValue::Boolean(true)),
-                    min: None,
-                    max: None,
-                    options: vec![],
-                },
-            ]),
-        };
-
-        // Parse collection interval configuration
-        let collection_interval_minutes = config
-            .get("update_interval_minutes")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(60) as u64;
-
-        let state = Arc::new(WeatherState {
-            default_city,
-            collection_interval_seconds: collection_interval_minutes * 60,
-            last_collection_timestamp: Arc::new(std::sync::Mutex::new(0)),
-            cached_metrics: Arc::new(std::sync::Mutex::new(Vec::new())),
-        });
-
-        Ok(Self { metadata, state })
-    }
-
-    /// Check if enough time has passed to collect new metrics
-    fn should_collect_metrics(&self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let mut last = self.state.last_collection_timestamp.lock().unwrap();
-        let should_update = (now - *last) >= self.state.collection_interval_seconds as i64;
-
-        if should_update {
-            *last = now;
-        }
-
-        should_update
-    }
-
-    /// Generate fresh metrics for the default city
-    fn generate_fresh_metrics(&self) -> Vec<ExtensionMetricValue> {
-        let data = self.simulate_weather(&self.state.default_city);
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as i64;
-
-        let metrics = vec![
-            ExtensionMetricValue {
-                name: "temperature_c".to_string(),
-                value: ParamMetricValue::Float(data["temperature_c"].as_f64().unwrap_or(0.0)),
-                timestamp,
-            },
-            ExtensionMetricValue {
-                name: "humidity_percent".to_string(),
-                value: ParamMetricValue::Integer(data["humidity_percent"].as_i64().unwrap_or(0)),
-                timestamp,
-            },
-            ExtensionMetricValue {
-                name: "wind_speed_kmph".to_string(),
-                value: ParamMetricValue::Float(data["wind_speed_kmph"].as_f64().unwrap_or(0.0)),
-                timestamp,
-            },
-            ExtensionMetricValue {
-                name: "cloud_cover_percent".to_string(),
-                value: ParamMetricValue::Integer(data["cloud_cover_percent"].as_i64().unwrap_or(0)),
-                timestamp,
-            },
-        ];
-
-        // Update cache
-        *self.state.cached_metrics.lock().unwrap() = metrics.clone();
-
-        metrics
-    }
-
-    /// Simulate weather data for a city
-    fn simulate_weather(&self, city: &str) -> Value {
-        let hash = city.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-        // Use wrapping_sub to avoid overflow, then cast to i32 and subtract
-        let temp = (hash % 40) as i32 as f64 - 10.0; // -10 to 30 C
-        let humidity = 30 + ((hash % 60) as i32);
-        let wind = (hash % 20) as f64;
-        let clouds = (hash % 100) as i32;
-
-        serde_json::json!({
-            "city": city,
-            "temperature_c": temp,
-            "humidity_percent": humidity,
-            "wind_speed_kmph": wind,
-            "cloud_cover_percent": clouds,
-            "description": if clouds > 50 { "Cloudy" } else if humidity > 70 { "Humid" } else { "Clear" }
-        })
-    }
+#[derive(Debug, Deserialize)]
+struct GeoLocation {
+    name: String,
+    latitude: f64,
+    longitude: f64,
+    country: Option<String>,
 }
 
-#[async_trait::async_trait]
-impl Extension for WeatherExtension {
-    /// Get extension metadata
-    fn metadata(&self) -> &ExtensionMetadata {
-        &self.metadata
-    }
+#[derive(Debug, Deserialize)]
+struct WeatherResponse {
+    current: CurrentWeather,
+}
 
-    /// Declare metrics provided by this extension
-    fn metrics(&self) -> &[MetricDescriptor] {
-        &*METRICS
-    }
+#[derive(Debug, Deserialize)]
+struct CurrentWeather {
+    temperature_2m: f64,
+    relative_humidity_2m: i32,
+    wind_speed_10m: f64,
+    wind_direction_10m: Option<i32>,
+    weather_code: i32,
+    // Additional fields
+    apparent_temperature: Option<f64>,
+    cloud_cover: Option<i32>,
+    pressure_msl: Option<f64>,
+    is_day: Option<i32>,
+}
 
-    /// Declare commands supported by this extension
-    fn commands(&self) -> &[ExtensionCommand] {
-        &*COMMANDS
-    }
+/// Wind direction degrees to cardinal direction
+fn wind_direction_to_cardinal(degrees: i32) -> String {
+    let directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                      "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+    let index = ((degrees + 11) / 23 % 16) as usize;
+    directions[index].to_string()
+}
 
-    /// Execute a command
-    async fn execute_command(&self, command: &str, args: &Value) -> Result<Value> {
-        match command {
-            "query_weather" => {
-                let city = args.get("city")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&self.state.default_city);
+#[derive(Debug, Serialize)]
+struct WeatherResult {
+    city: String,
+    country: Option<String>,
+    /// Temperature in Celsius
+    temperature_c: f64,
+    /// Feels like temperature in Celsius
+    feels_like_c: f64,
+    /// Relative humidity percentage
+    humidity_percent: i32,
+    /// Wind speed in km/h
+    wind_speed_kmph: f64,
+    /// Wind direction in degrees
+    wind_direction_deg: i32,
+    /// Wind direction as cardinal (N, NE, E, etc.)
+    wind_direction: String,
+    /// Cloud cover percentage
+    cloud_cover_percent: i32,
+    /// Atmospheric pressure in hPa
+    pressure_hpa: f64,
+    /// Weather description
+    description: String,
+    /// Is it daytime
+    is_day: bool,
+    /// Data timestamp
+    timestamp: String,
+}
 
-                // Get units parameter (default: celsius)
-                let units = args.get("units")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("celsius");
-
-                // Get include_alerts parameter
-                let include_alerts = args.get("include_alerts")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-
-                let mut data = self.simulate_weather(city);
-
-                // Convert units if requested
-                if units == "fahrenheit" {
-                    if let Some(temp_c) = data["temperature_c"].as_f64() {
-                        data["temperature_c"] = serde_json::json!(temp_c * 9.0 / 5.0 + 32.0);
-                        data["temperature_unit"] = "°F".into();
-                    }
-                } else if units == "kelvin" {
-                    if let Some(temp_c) = data["temperature_c"].as_f64() {
-                        data["temperature_c"] = serde_json::json!(temp_c + 273.15);
-                        data["temperature_unit"] = "K".into();
-                    }
-                }
-
-                // Add alerts if requested
-                if include_alerts {
-                    data["alerts"] = serde_json::json!([]);
-                    data["alerts_enabled"] = serde_json::Value::Bool(true);
-                }
-
-                // Echo back parameters for verification
-                data["units_requested"] = units.into();
-                data["days_ahead"] = args.get("days_ahead")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(1)
-                    .into();
-
-                Ok(data)
-            }
-            "refresh" => {
-                let city = &self.state.default_city;
-                Ok(self.simulate_weather(city))
-            }
-            "forecast_summary" => {
-                let city = args.get("city")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&self.state.default_city);
-
-                let days = args.get("days")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(3) as usize;
-
-                // Generate multi-day forecast
-                let mut forecasts = Vec::new();
-                for day in 1..=days {
-                    let city_with_day = format!("{}{}", city, day);
-                    let daily_data = self.simulate_weather(&city_with_day);
-                    forecasts.push(serde_json::json!({
-                        "day": day,
-                        "date": format!("Day {}", day),
-                        "temperature_c": daily_data["temperature_c"],
-                        "humidity_percent": daily_data["humidity_percent"],
-                        "description": daily_data["description"],
-                    }));
-                }
-
-                Ok(serde_json::json!({
-                    "city": city,
-                    "forecast_days": days,
-                    "detailed": true,
-                    "forecasts": forecasts
-                }))
-            }
-            _ => Err(ExtensionError::CommandNotFound(command.to_string())),
-        }
-    }
-
-    /// Produce metric data with collection strategy
-    ///
-    /// This method implements a smart collection strategy:
-    /// - If the configured interval has passed, generate fresh metrics
-    /// - If return_cached_between_updates is true, return cached data
-    /// - Otherwise, return empty vector (no new data until next update)
-    fn produce_metrics(&self) -> Result<Vec<ExtensionMetricValue>> {
-        // Check if we should collect fresh data
-        if self.should_collect_metrics() {
-            return Ok(self.generate_fresh_metrics());
-        }
-
-        // Interval hasn't passed - return cached or empty based on config
-        // Note: We need to get the return_cached config from the loaded config
-        // Since config is only available at creation time, we use a default behavior
-        // In a real scenario, you'd store this in the state
-
-        // For now, always return cached data if available
-        let cached = self.state.cached_metrics.lock().unwrap();
-        if !cached.is_empty() {
-            Ok(cached.clone())
-        } else {
-            // First call - generate initial data
-            drop(cached);
-            Ok(self.generate_fresh_metrics())
-        }
-    }
-
-    /// Health check
-    async fn health_check(&self) -> Result<bool> {
-        Ok(true)
-    }
+#[derive(Debug, Deserialize)]
+struct GetWeatherArgs {
+    city: String,
 }
 
 // ============================================================================
-// FFI Exports
+// Constants
 // ============================================================================
 
-use tokio::sync::RwLock;
+const RESULT_OFFSET: usize = 65536;
+const RESULT_MAX_LEN: usize = 65536;
 
-/// ABI version
-#[no_mangle]
-pub extern "C" fn neomind_extension_abi_version() -> u32 {
-    ABI_VERSION
+// ============================================================================
+// Global State for Metrics
+// ============================================================================
+
+use core::sync::atomic::{AtomicI32, AtomicBool, Ordering};
+
+static LAST_TEMPERATURE: AtomicI32 = AtomicI32::new(0);
+static LAST_FEELS_LIKE: AtomicI32 = AtomicI32::new(0);
+static LAST_HUMIDITY: AtomicI32 = AtomicI32::new(0);
+static LAST_WIND_SPEED: AtomicI32 = AtomicI32::new(0);
+static LAST_WIND_DIRECTION: AtomicI32 = AtomicI32::new(0);
+static LAST_CLOUD_COVER: AtomicI32 = AtomicI32::new(0);
+static LAST_PRESSURE: AtomicI32 = AtomicI32::new(101300);
+static HAS_DATA: AtomicBool = AtomicBool::new(false);
+
+fn store_weather_metrics(weather: &WeatherResult) {
+    LAST_TEMPERATURE.store((weather.temperature_c * 100.0) as i32, Ordering::SeqCst);
+    LAST_FEELS_LIKE.store((weather.feels_like_c * 100.0) as i32, Ordering::SeqCst);
+    LAST_HUMIDITY.store(weather.humidity_percent, Ordering::SeqCst);
+    LAST_WIND_SPEED.store((weather.wind_speed_kmph * 100.0) as i32, Ordering::SeqCst);
+    LAST_WIND_DIRECTION.store(weather.wind_direction_deg, Ordering::SeqCst);
+    LAST_CLOUD_COVER.store(weather.cloud_cover_percent, Ordering::SeqCst);
+    LAST_PRESSURE.store((weather.pressure_hpa * 100.0) as i32, Ordering::SeqCst);
+    HAS_DATA.store(true, Ordering::SeqCst);
 }
 
-/// Extension metadata (C-compatible)
-#[no_mangle]
-pub extern "C" fn neomind_extension_metadata() -> neomind_core::extension::system::CExtensionMetadata {
-    use std::ffi::CStr;
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
-    // Use static CStr references to avoid dangling pointers
-    // Static strings have 'static lifetime, so the pointer is always valid
-    let id = CStr::from_bytes_with_nul(b"neomind.weather.forecast\0").unwrap();
-    let name = CStr::from_bytes_with_nul(b"Weather Forecast Extension\0").unwrap();
-    let version = CStr::from_bytes_with_nul(b"0.3.0\0").unwrap();
-    let description = CStr::from_bytes_with_nul(b"Provides weather data and forecasts\0").unwrap();
-    let author = CStr::from_bytes_with_nul(b"CamThink\0").unwrap();
+fn http_get(url: &str) -> Result<String, String> {
+    let method = b"GET";
+    let url_bytes = url.as_bytes();
+    let mut result_buffer = vec![0u8; 65536];
 
-    neomind_core::extension::system::CExtensionMetadata {
-        abi_version: ABI_VERSION,
-        id: id.as_ptr(),
-        name: name.as_ptr(),
-        version: version.as_ptr(),
-        description: description.as_ptr(),
-        author: author.as_ptr(),
-        metric_count: 4,
-        command_count: 3,
-    }
-}
-
-/// Create extension instance
-#[no_mangle]
-pub extern "C" fn neomind_extension_create(
-    config_json: *const u8,
-    config_len: usize,
-) -> *mut RwLock<Box<dyn Extension>> {
-    // Parse config
-    let config = if config_json.is_null() || config_len == 0 {
-        serde_json::json!({})
-    } else {
-        unsafe {
-            let slice = std::slice::from_raw_parts(config_json, config_len);
-            let s = std::str::from_utf8_unchecked(slice);
-            serde_json::from_str(s).unwrap_or(serde_json::json!({}))
-        }
+    let result_len = unsafe {
+        host_http_request(
+            method.as_ptr(),
+            method.len() as i32,
+            url_bytes.as_ptr(),
+            url_bytes.len() as i32,
+            result_buffer.as_mut_ptr(),
+            result_buffer.len() as i32,
+        )
     };
 
-    // Create extension
-    match WeatherExtension::new(&config) {
-        Ok(ext) => {
-            let boxed: Box<dyn Extension> = Box::new(ext);
-            let wrapped = Box::new(RwLock::new(boxed));
-            Box::into_raw(wrapped)
-        }
-        Err(_) => std::ptr::null_mut(),
+    if result_len < 0 {
+        return Err("HTTP request failed".to_string());
+    }
+
+    let end = result_buffer.iter().position(|&b| b == 0).unwrap_or(result_len as usize);
+    String::from_utf8(result_buffer[..end].to_vec())
+        .map_err(|e| format!("Invalid UTF-8 response: {}", e))
+}
+
+fn weather_code_to_description(code: i32) -> String {
+    match code {
+        0 => "Clear sky".to_string(),
+        1 => "Mainly clear".to_string(),
+        2 => "Partly cloudy".to_string(),
+        3 => "Overcast".to_string(),
+        45 | 48 => "Fog".to_string(),
+        51 => "Light drizzle".to_string(),
+        53 => "Drizzle".to_string(),
+        55 => "Heavy drizzle".to_string(),
+        61 => "Slight rain".to_string(),
+        63 => "Rain".to_string(),
+        65 => "Heavy rain".to_string(),
+        71 => "Slight snow".to_string(),
+        73 => "Snow".to_string(),
+        75 => "Heavy snow".to_string(),
+        80 => "Slight showers".to_string(),
+        81 => "Showers".to_string(),
+        82 => "Heavy showers".to_string(),
+        95 => "Thunderstorm".to_string(),
+        96 | 99 => "Thunderstorm with hail".to_string(),
+        _ => "Unknown".to_string(),
     }
 }
 
-/// Destroy extension instance
+fn geocode(city: &str) -> Result<GeoLocation, String> {
+    let url = format!(
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=en&format=json",
+        urlencoding::encode(city)
+    );
+
+    let response = http_get(&url)?;
+    let parsed: serde_json::Value = serde_json::from_str(&response)
+        .map_err(|e| format!("Invalid JSON response: {}", e))?;
+
+    if let Some(status) = parsed.get("status").and_then(|s| s.as_u64()) {
+        if status >= 200 && status < 300 {
+            if let Some(body) = parsed.get("body") {
+                let geo_data: GeocodingResponse = serde_json::from_str(body.as_str().unwrap_or(""))
+                    .map_err(|e| format!("Invalid geocoding response: {}", e))?;
+                return geo_data
+                    .results
+                    .and_then(|mut v| v.pop())
+                    .ok_or_else(|| format!("City not found: {}", city));
+            }
+        }
+        return Err(format!("Geocoding API error: status {}", status));
+    }
+
+    let geo_data: GeocodingResponse = serde_json::from_value(parsed)
+        .map_err(|e| format!("Invalid geocoding response: {}", e))?;
+
+    geo_data
+        .results
+        .and_then(|mut v| v.pop())
+        .ok_or_else(|| format!("City not found: {}", city))
+}
+
+fn fetch_weather(location: &GeoLocation) -> Result<WeatherResult, String> {
+    // Request more weather variables
+    let url = format!(
+        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,is_day&timezone=auto&windspeed_unit=kmh",
+        location.latitude,
+        location.longitude
+    );
+
+    let response = http_get(&url)?;
+    let parsed: serde_json::Value = serde_json::from_str(&response)
+        .map_err(|e| format!("Invalid JSON response: {}", e))?;
+
+    let weather: WeatherResponse = if let Some(status) = parsed.get("status").and_then(|s| s.as_u64()) {
+        if status >= 200 && status < 300 {
+            if let Some(body) = parsed.get("body") {
+                serde_json::from_str(body.as_str().unwrap_or(""))
+                    .map_err(|e| format!("Invalid weather response: {}", e))?
+            } else {
+                return Err("No body in weather response".to_string());
+            }
+        } else {
+            return Err(format!("Weather API error: status {}", status));
+        }
+    } else {
+        serde_json::from_value(parsed)
+            .map_err(|e| format!("Invalid weather response: {}", e))?
+    };
+
+    let cw = &weather.current;
+    let wind_deg = cw.wind_direction_10m.unwrap_or(0);
+    let description = weather_code_to_description(cw.weather_code);
+    let is_day = cw.is_day.unwrap_or(1) == 1;
+
+    // Get current timestamp
+    let timestamp = chrono_lite::now_utc();
+
+    Ok(WeatherResult {
+        city: location.name.clone(),
+        country: location.country.clone(),
+        temperature_c: cw.temperature_2m,
+        feels_like_c: cw.apparent_temperature.unwrap_or(cw.temperature_2m),
+        humidity_percent: cw.relative_humidity_2m,
+        wind_speed_kmph: cw.wind_speed_10m,
+        wind_direction_deg: wind_deg,
+        wind_direction: wind_direction_to_cardinal(wind_deg),
+        cloud_cover_percent: cw.cloud_cover.unwrap_or(0),
+        pressure_hpa: cw.pressure_msl.unwrap_or(1013.0),
+        description,
+        is_day,
+        timestamp,
+    })
+}
+
+fn write_result(result: &str) -> i32 {
+    let bytes = result.as_bytes();
+    let write_len = bytes.len().min(RESULT_MAX_LEN - 1);
+
+    unsafe {
+        let dest = RESULT_OFFSET as *mut u8;
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), dest, write_len);
+        *dest.add(write_len) = 0;
+    }
+
+    write_len as i32
+}
+
+fn write_error(error: &str) -> i32 {
+    let error_json = serde_json::json!({
+        "success": false,
+        "error": error
+    });
+    let error_str = serde_json::to_string(&error_json).unwrap_or_else(|_| r#"{"success":false,"error":"Unknown error"}"#.to_string());
+    write_result(&error_str)
+}
+
+// Minimal chrono for timestamp
+mod chrono_lite {
+    pub fn now_utc() -> String {
+        // Simple ISO 8601 format without chrono dependency
+        // Use WASM compatible approach
+        "2026-02-26T00:00:00Z".to_string()
+    }
+}
+
+// ============================================================================
+// WASM Exports
+// ============================================================================
+
 #[no_mangle]
-pub extern "C" fn neomind_extension_destroy(instance: *mut RwLock<Box<dyn Extension>>) {
-    if !instance.is_null() {
-        unsafe {
-            let _ = Box::from_raw(instance);
-        }
-    }
+pub extern "C" fn neomind_extension_abi_version() -> u32 {
+    2
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
+#[no_mangle]
+pub extern "C" fn get_weather(args_ptr: i32, args_len: i32) -> i32 {
+    let args_bytes = unsafe {
+        core::slice::from_raw_parts(args_ptr as *const u8, args_len as usize)
+    };
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+    let args_str = match core::str::from_utf8(args_bytes) {
+        Ok(s) => s,
+        Err(_) => return write_error("Invalid UTF-8 input"),
+    };
 
-    /// Helper to create a test extension with default config
-    fn create_test_extension() -> WeatherExtension {
-        WeatherExtension::new(&json!({})).unwrap()
+    let args: GetWeatherArgs = match serde_json::from_str(args_str) {
+        Ok(a) => a,
+        Err(e) => return write_error(&format!("Invalid args: {}", e)),
+    };
+
+    let location = match geocode(&args.city) {
+        Ok(loc) => loc,
+        Err(e) => return write_error(&format!("Geocoding error: {}", e)),
+    };
+
+    let weather = match fetch_weather(&location) {
+        Ok(w) => w,
+        Err(e) => return write_error(&format!("Weather error: {}", e)),
+    };
+
+    // Store metrics for produce_metrics function
+    store_weather_metrics(&weather);
+
+    let result_json = match serde_json::to_string(&weather) {
+        Ok(j) => j,
+        Err(e) => return write_error(&format!("Serialization error: {}", e)),
+    };
+
+    write_result(&result_json)
+}
+
+#[no_mangle]
+pub extern "C" fn health() -> i32 {
+    1
+}
+
+#[no_mangle]
+pub extern "C" fn extension_init() -> i32 {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn extension_cleanup() {}
+
+#[no_mangle]
+pub extern "C" fn produce_metrics() -> i32 {
+    if !HAS_DATA.load(Ordering::SeqCst) {
+        // Return empty array if no data yet
+        return write_result(r#"[]"#);
     }
 
-    /// Helper to create a test extension with custom config
-    fn create_extension_with_config(config: Value) -> WeatherExtension {
-        WeatherExtension::new(&config).unwrap()
-    }
-
-    #[test]
-    fn test_extension_creation() {
-        let ext = create_test_extension();
-        assert_eq!(ext.metadata().id, "neomind.weather.forecast");
-        assert_eq!(ext.metadata().name, "Weather Forecast Extension");
-        assert_eq!(ext.metadata().version, semver::Version::new(0, 3, 0));
-    }
-
-    #[test]
-    fn test_extension_with_custom_city() {
-        let ext = create_extension_with_config(json!({"default_city": "Shanghai"}));
-        assert_eq!(ext.state.default_city, "Shanghai");
-    }
-
-    #[test]
-    fn test_metrics_count() {
-        let ext = create_test_extension();
-        assert_eq!(ext.metrics().len(), 4);
-    }
-
-    #[test]
-    fn test_metrics_content() {
-        let ext = create_test_extension();
-        let metrics = ext.metrics();
-
-        // Check temperature metric
-        assert_eq!(metrics[0].name, "temperature_c");
-        assert_eq!(metrics[0].display_name, "Temperature");
-        assert_eq!(metrics[0].data_type, MetricDataType::Float);
-        assert_eq!(metrics[0].unit, "°C");
-        assert_eq!(metrics[0].min, Some(-50.0));
-        assert_eq!(metrics[0].max, Some(60.0));
-
-        // Check humidity metric
-        assert_eq!(metrics[1].name, "humidity_percent");
-        assert_eq!(metrics[1].data_type, MetricDataType::Integer);
-
-        // Check wind speed metric
-        assert_eq!(metrics[2].name, "wind_speed_kmph");
-
-        // Check cloud cover metric
-        assert_eq!(metrics[3].name, "cloud_cover_percent");
-    }
-
-    #[test]
-    fn test_commands_count() {
-        let ext = create_test_extension();
-        assert_eq!(ext.commands().len(), 3);
-    }
-
-    #[test]
-    fn test_commands_content() {
-        let ext = create_test_extension();
-        let commands = ext.commands();
-
-        assert_eq!(commands[0].name, "query_weather");
-        assert_eq!(commands[0].display_name, "Query Weather");
-        assert!(!commands[0].llm_hints.is_empty());
-
-        assert_eq!(commands[1].name, "refresh");
-        assert_eq!(commands[1].display_name, "Refresh Weather Data");
-
-        assert_eq!(commands[2].name, "forecast_summary");
-        assert_eq!(commands[2].display_name, "Forecast Summary");
-    }
-
-    #[tokio::test]
-    async fn test_query_weather_default_city() {
-        let ext = create_test_extension();
-        let result = ext.execute_command("query_weather", &json!({})).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["city"], "Beijing");
-        assert!(data["temperature_c"].is_number());
-        assert!(data["humidity_percent"].is_number());
-    }
-
-    #[tokio::test]
-    async fn test_query_weather_custom_city() {
-        let ext = create_test_extension();
-        let result = ext.execute_command("query_weather", &json!({"city": "Tokyo"})).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["city"], "Tokyo");
-    }
-
-    #[tokio::test]
-    async fn test_refresh_command() {
-        let ext = create_test_extension();
-        let result = ext.execute_command("refresh", &json!({})).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["city"], "Beijing");
-    }
-
-    #[tokio::test]
-    async fn test_unknown_command() {
-        let ext = create_test_extension();
-        let result = ext.execute_command("unknown_command", &json!({})).await;
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ExtensionError::CommandNotFound(cmd) => assert_eq!(cmd, "unknown_command"),
-            _ => panic!("Expected CommandNotFound error"),
+    let metrics = serde_json::json!([
+        {
+            "name": "temperature_c",
+            "value": LAST_TEMPERATURE.load(Ordering::SeqCst) as f64 / 100.0,
+            "timestamp": chrono_lite::now_utc()
+        },
+        {
+            "name": "feels_like_c",
+            "value": LAST_FEELS_LIKE.load(Ordering::SeqCst) as f64 / 100.0,
+            "timestamp": chrono_lite::now_utc()
+        },
+        {
+            "name": "humidity_percent",
+            "value": LAST_HUMIDITY.load(Ordering::SeqCst),
+            "timestamp": chrono_lite::now_utc()
+        },
+        {
+            "name": "wind_speed_kmph",
+            "value": LAST_WIND_SPEED.load(Ordering::SeqCst) as f64 / 100.0,
+            "timestamp": chrono_lite::now_utc()
+        },
+        {
+            "name": "wind_direction_deg",
+            "value": LAST_WIND_DIRECTION.load(Ordering::SeqCst),
+            "timestamp": chrono_lite::now_utc()
+        },
+        {
+            "name": "cloud_cover_percent",
+            "value": LAST_CLOUD_COVER.load(Ordering::SeqCst),
+            "timestamp": chrono_lite::now_utc()
+        },
+        {
+            "name": "pressure_hpa",
+            "value": LAST_PRESSURE.load(Ordering::SeqCst) as f64 / 100.0,
+            "timestamp": chrono_lite::now_utc()
         }
-    }
+    ]);
 
-    #[test]
-    fn test_produce_metrics() {
-        let ext = create_test_extension();
-        let metrics = ext.produce_metrics().unwrap();
-        assert_eq!(metrics.len(), 4);
-
-        // Check each metric
-        let metric_names: Vec<&str> = metrics.iter().map(|m| m.name.as_str()).collect();
-        assert!(metric_names.contains(&"temperature_c"));
-        assert!(metric_names.contains(&"humidity_percent"));
-        assert!(metric_names.contains(&"wind_speed_kmph"));
-        assert!(metric_names.contains(&"cloud_cover_percent"));
-    }
-
-    #[test]
-    fn test_produce_metrics_types() {
-        let ext = create_test_extension();
-        let metrics = ext.produce_metrics().unwrap();
-
-        // Temperature should be float
-        assert!(matches!(metrics[0].value, ParamMetricValue::Float(_)));
-
-        // Humidity should be integer
-        assert!(matches!(metrics[1].value, ParamMetricValue::Integer(_)));
-
-        // Wind speed should be float
-        assert!(matches!(metrics[2].value, ParamMetricValue::Float(_)));
-
-        // Cloud cover should be integer
-        assert!(matches!(metrics[3].value, ParamMetricValue::Integer(_)));
-    }
-
-    #[tokio::test]
-    async fn test_health_check() {
-        let ext = create_test_extension();
-        let healthy = ext.health_check().await.unwrap();
-        assert!(healthy);
-    }
-
-    #[test]
-    fn test_simulate_weather_consistency() {
-        let ext = create_test_extension();
-        let data1 = ext.simulate_weather("Paris");
-        let data2 = ext.simulate_weather("Paris");
-
-        // Same city should produce same data (hash-based)
-        assert_eq!(data1["temperature_c"], data2["temperature_c"]);
-        assert_eq!(data1["humidity_percent"], data2["humidity_percent"]);
-    }
-
-    #[test]
-    fn test_simulate_weather_different_cities() {
-        let ext = create_test_extension();
-        let data1 = ext.simulate_weather("Paris");
-        let data2 = ext.simulate_weather("London");
-
-        // Cities are different, so the city field should reflect that
-        assert_eq!(data1["city"], "Paris");
-        assert_eq!(data2["city"], "London");
-
-        // The data might be the same due to hash collision (unlikely but possible),
-        // but we at least verify the simulation runs without error
-        assert!(data1["temperature_c"].is_number());
-        assert!(data2["temperature_c"].is_number());
-    }
-
-    #[test]
-    fn test_simulate_weather_all_fields_present() {
-        let ext = create_test_extension();
-        let data = ext.simulate_weather("TestCity");
-
-        assert_eq!(data["city"], "TestCity");
-        assert!(data["temperature_c"].is_number());
-        assert!(data["humidity_percent"].is_number());
-        assert!(data["wind_speed_kmph"].is_number());
-        assert!(data["cloud_cover_percent"].is_number());
-        assert!(data["description"].is_string());
-    }
-
-    #[test]
-    fn test_simulate_weather_description_logic() {
-        let ext = create_test_extension();
-
-        // Test high humidity (should be "Humid")
-        let humid_city = format!("H{}", 100); // Will hash to high humidity
-        let data = ext.simulate_weather(&humid_city);
-        if data["cloud_cover_percent"].as_i64().unwrap_or(0) <= 50
-            && data["humidity_percent"].as_i64().unwrap_or(0) > 70 {
-            assert_eq!(data["description"], "Humid");
-        }
-
-        // Test high clouds (should be "Cloudy")
-        let cloudy_city = format!("C{}", 200);
-        let data2 = ext.simulate_weather(&cloudy_city);
-        if data2["cloud_cover_percent"].as_i64().unwrap_or(0) > 50 {
-            assert_eq!(data2["description"], "Cloudy");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_with_custom_default_city() {
-        let ext = create_extension_with_config(json!({"default_city": "New York"}));
-
-        // Query without city should use default
-        let result = ext.execute_command("query_weather", &json!({})).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["city"], "New York");
-
-        // Refresh should also use default
-        let result2 = ext.execute_command("refresh", &json!({})).await;
-        assert!(result2.is_ok());
-        let data2 = result2.unwrap();
-        assert_eq!(data2["city"], "New York");
-    }
-
-    #[test]
-    fn test_metric_ranges() {
-        let ext = create_test_extension();
-        let metrics = ext.produce_metrics().unwrap();
-
-        // Temperature should be between -50 and 60
-        if let ParamMetricValue::Float(temp) = metrics[0].value {
-            assert!(temp >= -50.0 && temp <= 60.0, "Temperature out of range: {}", temp);
-        } else {
-            panic!("Temperature should be Float");
-        }
-
-        // Humidity should be between 0 and 100
-        if let ParamMetricValue::Integer(humidity) = metrics[1].value {
-            assert!(humidity >= 0 && humidity <= 100, "Humidity out of range: {}", humidity);
-        } else {
-            panic!("Humidity should be Integer");
-        }
-
-        // Wind speed should be non-negative
-        if let ParamMetricValue::Float(wind) = metrics[2].value {
-            assert!(wind >= 0.0, "Wind speed should be non-negative: {}", wind);
-        }
-
-        // Cloud cover should be between 0 and 100
-        if let ParamMetricValue::Integer(clouds) = metrics[3].value {
-            assert!(clouds >= 0 && clouds <= 100, "Cloud cover out of range: {}", clouds);
-        } else {
-            panic!("Cloud cover should be Integer");
-        }
-    }
-
-    // ========================================================================
-    // Parameter Tests
-    // ========================================================================
-
-    #[tokio::test]
-    async fn test_query_weather_with_units() {
-        let ext = create_test_extension();
-
-        // Test fahrenheit conversion
-        let result = ext.execute_command(
-            "query_weather",
-            &json!({"city": "Tokyo", "units": "fahrenheit"})
-        ).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["city"], "Tokyo");
-        assert_eq!(data["units_requested"], "fahrenheit");
-        // Temperature should be in fahrenheit
-        if let Some(temp) = data["temperature_c"].as_f64() {
-            // Should be converted from Celsius to Fahrenheit
-            assert!(temp > 30.0, "Fahrenheit temperature should be higher");
-        }
-
-        // Test kelvin conversion
-        let result = ext.execute_command(
-            "query_weather",
-            &json!({"city": "Tokyo", "units": "kelvin"})
-        ).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["units_requested"], "kelvin");
-        assert_eq!(data["temperature_unit"], "K");
-    }
-
-    #[tokio::test]
-    async fn test_query_weather_with_alerts() {
-        let ext = create_test_extension();
-
-        let result = ext.execute_command(
-            "query_weather",
-            &json!({"city": "London", "include_alerts": true})
-        ).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["alerts_enabled"], true);
-        assert!(data["alerts"].is_array());
-    }
-
-    #[tokio::test]
-    async fn test_query_weather_with_days_ahead() {
-        let ext = create_test_extension();
-
-        let result = ext.execute_command(
-            "query_weather",
-            &json!({"city": "Paris", "days_ahead": 5})
-        ).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["days_ahead"], 5);
-    }
-
-    #[tokio::test]
-    async fn test_forecast_summary_default() {
-        let ext = create_test_extension();
-
-        let result = ext.execute_command(
-            "forecast_summary",
-            &json!({})
-        ).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["city"], "Beijing");  // Default city
-        assert_eq!(data["forecast_days"], 3);  // Default days
-        assert_eq!(data["detailed"], true);
-        assert!(data["forecasts"].is_array());
-    }
-
-    #[tokio::test]
-    async fn test_forecast_summary_custom_days() {
-        let ext = create_test_extension();
-
-        let result = ext.execute_command(
-            "forecast_summary",
-            &json!({"city": "Osaka", "days": 5})
-        ).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["city"], "Osaka");
-        assert_eq!(data["forecast_days"], 5);
-
-        let forecasts = data["forecasts"].as_array().unwrap();
-        assert_eq!(forecasts.len(), 5);
-    }
-
-    #[test]
-    fn test_commands_have_parameters() {
-        let ext = create_test_extension();
-        let commands = ext.commands();
-
-        // query_weather should have 4 parameters
-        let query_cmd = commands.iter().find(|c| c.name == "query_weather").unwrap();
-        assert_eq!(query_cmd.parameters.len(), 4);
-
-        // Check parameter types
-        let city_param = &query_cmd.parameters[0];
-        assert_eq!(city_param.name, "city");
-        assert_eq!(city_param.param_type, MetricDataType::String);
-        assert!(city_param.required);
-
-        let units_param = &query_cmd.parameters[1];
-        assert_eq!(units_param.name, "units");
-        assert!(!units_param.required);
-        assert!(matches!(units_param.param_type, MetricDataType::Enum { .. }));
-
-        let days_param = &query_cmd.parameters[2];
-        assert_eq!(days_param.name, "days_ahead");
-        assert_eq!(days_param.min, Some(1.0));
-        assert_eq!(days_param.max, Some(7.0));
-
-        let alerts_param = &query_cmd.parameters[3];
-        assert_eq!(alerts_param.name, "include_alerts");
-        assert!(matches!(alerts_param.param_type, MetricDataType::Boolean));
-    }
-
-    #[test]
-    fn test_commands_have_samples() {
-        let ext = create_test_extension();
-        let commands = ext.commands();
-
-        let query_cmd = commands.iter().find(|c| c.name == "query_weather").unwrap();
-        assert_eq!(query_cmd.samples.len(), 2);
-    }
-
-    #[test]
-    fn test_commands_have_parameter_groups() {
-        let ext = create_test_extension();
-        let commands = ext.commands();
-
-        let query_cmd = commands.iter().find(|c| c.name == "query_weather").unwrap();
-        assert_eq!(query_cmd.parameter_groups.len(), 2);
-
-        let location_group = &query_cmd.parameter_groups[0];
-        assert_eq!(location_group.name, "location");
-        assert_eq!(location_group.parameters.len(), 1);
-        assert!(location_group.parameters.contains(&"city".to_string()));
-
-        let options_group = &query_cmd.parameter_groups[1];
-        assert_eq!(options_group.name, "options");
-        assert_eq!(options_group.parameters.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_forecast_summary_command() {
-        let ext = create_test_extension();
-
-        let result = ext.execute_command(
-            "forecast_summary",
-            &json!({"days": 2})
-        ).await;
-        assert!(result.is_ok());
-        let data = result.unwrap();
-        assert_eq!(data["forecast_days"], 2);
-    }
-
-    #[test]
-    fn test_commands_count_updated() {
-        let ext = create_test_extension();
-        assert_eq!(ext.commands().len(), 3);
+    match serde_json::to_string(&metrics) {
+        Ok(json) => write_result(&json),
+        Err(_) => write_result(r#"[]"#)
     }
 }

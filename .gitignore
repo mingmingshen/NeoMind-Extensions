@@ -21,6 +21,24 @@ Cargo.lock
 *.dll
 *.a
 *.lib
+*.wasm
+*.wat
+
+# Built .nep packages (too large for git)
+dist/
+*.nep
+
+# Pre-built binaries (too large for git)
+libneomind_extension_*.dylib
+libneomind_extension_*.so
+libneomind_extension_*.dll
+
+# Models and data files (too large for git)
+models/
+*.bin
+*.onnx
+*.pt
+*.pth
 
 # Profiling
 *.profraw
@@ -50,11 +68,27 @@ package-lock.json
 *.wasm
 *.wat
 # Build outputs from AssemblyScript
-/extensions/as-hello/build/
+/extensions/*/build/
+/extensions/*/target/
+/extensions/*/.serena/
 
 # Test coverage
 coverage/
 
 # Serena MCP tool (cache and config)
 .serena/
+
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# GitHub Actions cache (local testing)
+.github/workflows/*-cache/
+
+# Release files (these should be in Releases, not git)
+release-files/
+releases/

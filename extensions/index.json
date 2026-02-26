@@ -1,61 +1,39 @@
 {
   "version": "1.0",
-  "last_updated": "2025-02-16T12:00:00Z",
+  "last_updated": "2025-02-26T12:00:00Z",
   "extensions": [
     {
-      "id": "as-hello",
-      "name": "AssemblyScript Hello Extension",
-      "description": "A WASM extension written in AssemblyScript (TypeScript-like) with fast compile times and small binary size",
-      "version": "0.5.8",
-      "author": "CamThink",
+      "id": "image-analyzer",
+      "name": "Image Analyzer",
+      "description": "Object detection and image analysis with dashboard component. Supports JPEG, PNG, and WebP formats.",
+      "version": "0.1.0",
+      "author": "NeoMind",
       "license": "MIT",
-      "categories": ["example", "wasm", "cross-platform", "assemblyscript", "typescript"],
-      "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/as-hello",
-      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/as-hello/metadata.json"
+      "categories": ["image", "vision", "detection"],
+      "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/image-analyzer",
+      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/image-analyzer/manifest.json"
     },
     {
       "id": "weather-forecast",
       "name": "Weather Forecast",
-      "description": "Global weather data and forecasts for any city",
-      "version": "0.5.8",
-      "author": "CamThink",
+      "description": "Real-time weather data using Open-Meteo API. Cross-platform WASM extension with dashboard widget.",
+      "version": "0.1.0",
+      "author": "NeoMind Team",
       "license": "MIT",
-      "categories": ["weather", "data"],
+      "categories": ["weather", "data", "wasm", "cross-platform"],
       "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/weather-forecast",
-      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/weather-forecast/metadata.json"
-    },
-    {
-      "id": "com.example.template",
-      "name": "Template Extension",
-      "description": "A basic native extension template for NeoMind. Provides example metrics and commands to help developers get started with extension development.",
-      "version": "1.0.0",
-      "author": "NeoMind Team",
-      "license": "MIT",
-      "categories": ["example", "template", "developer"],
-      "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/template",
-      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/template/metadata.json"
-    },
-    {
-      "id": "image-analyzer",
-      "name": "Image Analyzer",
-      "description": "Stateless image analysis extension that detects objects and analyzes image properties. Supports JPEG, PNG, and WebP formats.",
-      "version": "1.0.0",
-      "author": "NeoMind Team",
-      "license": "MIT",
-      "categories": ["image", "vision", "streaming", "stateless"],
-      "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/image-analyzer",
-      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/image-analyzer/metadata.json"
+      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/weather-forecast/manifest.json"
     },
     {
       "id": "yolo-video",
       "name": "YOLO Video Processor",
-      "description": "Stateful video stream processing with YOLO object detection. Maintains session context for continuous video processing with real-time FPS metrics.",
-      "version": "1.0.0",
-      "author": "NeoMind Team",
+      "description": "Real-time video stream processing with YOLO object detection. Supports RTSP, RTMP, HLS, Camera, File, and Screen sources.",
+      "version": "0.1.0",
+      "author": "NeoMind",
       "license": "MIT",
-      "categories": ["video", "vision", "streaming", "stateful", "detection"],
+      "categories": ["video", "vision", "streaming", "detection"],
       "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/yolo-video",
-      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/yolo-video/metadata.json"
+      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/yolo-video/manifest.json"
     }
   ]
 }

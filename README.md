@@ -10,43 +10,152 @@ This repository contains officially maintained extensions for the NeoMind Edge A
 
 ### Extension Types
 
-NeoMind supports **two types of extensions**:
+NeoMind supports **three extension distribution formats**:
 
-| Type | File Format | Description | Best For |
-|------|-------------|-------------|----------|
-| **Native** | `.dylib` / `.so` / `.dll` | Platform-specific dynamic libraries loaded via FFI | Maximum performance, full system access |
-| **WASM** | `.wasm` + `.json` | WebAssembly modules with sandboxed execution | Cross-platform distribution, safe execution |
+| Format | File Extension | Description | Use Case |
+|--------|---------------|-------------|----------|
+| **.nep Package** | `.nep` | ZIP archive with binaries + frontend + metadata | **Recommended**: Complete extension distribution |
+| **Native Binary** | `.dylib` / `.so` / `.dll` | Platform-specific dynamic libraries | Development builds, custom extensions |
+| **WASM Module** | `.wasm` + `.json` | WebAssembly modules | Cross-platform without packaging |
 
-### Why WASM Extensions?
+### Why .nep Packages?
 
-**Native Extensions** (`.dylib`/`.so`/`.dll`):
-- **Pros**: Maximum performance, full system access, wide language support via C FFI
-- **Cons**: Must compile for each platform (macOS ARM64, macOS x64, Linux, Windows)
-
-**WASM Extensions** (`.wasm`):
-- **Pros**: Write once, run anywhere; sandboxed execution; small file size (<100KB); multi-language support (Rust, AssemblyScript/TypeScript, Go, etc.)
-- **Cons**: ~10-30% performance overhead; limited system access (via host API)
-
-> **Tip**: Choose WASM for ease of distribution and cross-platform compatibility. Choose Native for performance-critical extensions that need direct system access.
+**.nep (NeoMind Extension Package)** is the recommended distribution format:
+- ✅ **Single file** - Contains binaries, frontend components, and metadata
+- ✅ **Multi-platform** - Includes binaries for all platforms in one package
+- ✅ **Frontend support** - Can bundle React components for the dashboard
+- ✅ **Checksum verification** - SHA256 validation ensures integrity
+- ✅ **Easy installation** - Drag & drop in NeoMind web UI
 
 ---
 
-## For Users: Installing Extensions
+## Quick Start: Installing Extensions
 
-### Via NeoMind Extension Marketplace (Recommended)
+### Method 1: Drag & Drop (Recommended)
 
-The easiest way to install extensions is through the built-in marketplace in NeoMind:
+1. Download a `.nep` package from [Releases](https://github.com/camthink-ai/NeoMind-Extensions/releases)
+2. Open NeoMind Web UI → Extensions
+3. Click **Add Extension** → Switch to **File Mode**
+4. Drag & drop the `.nep` file
+5. Click **Upload & Install**
 
-1. Open NeoMind Web UI
-2. Navigate to **Extensions** → **Marketplace**
-3. Browse available extensions
-4. Click **Install** on any extension
-5. The extension will be automatically downloaded and installed
+### Method 2: NeoMind Marketplace
 
-Extensions are fetched from:
-- **Index**: https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/index.json
-- **Metadata**: https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/{id}/metadata.json
-- **Binaries**: https://github.com/camthink-ai/NeoMind-Extensions/releases
+1. Open NeoMind Web UI → Extensions → Marketplace
+2. Browse available extensions
+3. Click **Install** on any extension
+4. The extension will be automatically downloaded and installed
+
+### Method 3: API Installation
+
+```bash
+curl -X POST http://your-neomind:9375/api/extensions/upload/file \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @extension-name.nep
+```
+
+---
+
+## For Extension Developers
+
+### Building .nep Packages
+
+Use the provided `package.sh` script to build .nep packages:
+
+```bash
+# Build a single extension
+bash scripts/package.sh -d extensions/weather-forecast-wasm
+
+# Build with verification
+bash scripts/package.sh -d extensions/weather-forecast-wasm -v
+
+# Build for current platform only
+bash scripts/package.sh -d extensions/template -p current
+```
+
+The script will:
+1. Build the extension (Rust/Cargo or use pre-built WASM)
+2. Create proper directory structure
+3. Package binaries, frontend components, and metadata
+4. Calculate SHA256 checksum
+5. Output: `dist/{extension-id}-{version}.nep`
+
+### Extension Directory Structure
+
+```
+extensions/
+└── your-extension/
+    ├── manifest.json       # Extension metadata (required)
+    ├── Cargo.toml          # Rust project (if native/WASM)
+    ├── src/                # Source code
+    │   └── lib.rs
+    ├── frontend/           # React components (optional)
+    │   ├── src/
+    │   ├── package.json
+    │   └── dist/           # Built JS files
+    └── README.md           # Documentation
+```
+
+### manifest.json Format
+
+```json
+{
+  "format": "neomind-extension-package",
+  "format_version": "1.0",
+  "id": "neomind.example.extension",
+  "name": "Example Extension",
+  "version": "1.0.0",
+  "description": "An example extension",
+  "author": "Your Name",
+  "license": "MIT",
+  "type": "wasm",
+  "binaries": {
+    "wasm": "binaries/wasm/extension.wasm"
+  },
+  "permissions": [],
+  "config_parameters": [],
+  "metrics": [],
+  "commands": [],
+  "dashboard_components": []
+}
+```
+
+See [EXTENSION_GUIDE.md](EXTENSION_GUIDE.md) for detailed documentation.
+
+---
+
+## Available Extensions
+
+### Weather Forecast (WASM)
+- **ID**: `neomind.weather.forecast.wasm`
+- **Description**: Real-time weather data using Open-Meteo API
+- **Package**: [Download](https://github.com/camthink-ai/NeoMind-Extensions/releases/latest)
+- **Components**: Weather card dashboard widget
+
+### More extensions coming soon...
+
+---
+
+## CI/CD
+
+This repository uses GitHub Actions for automatic building:
+
+- **On push** to `main`: Builds changed extensions
+- **Manual trigger**: Build specific extensions or all
+- **Release**: Creates GitHub releases with .nep packages
+
+See [`.github/workflows/build-nep-packages.yml`](.github/workflows/build-nep-packages.yml)
+
+---
+
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+This repository is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
 
 ### Manual Installation
 
@@ -196,16 +305,25 @@ Weather data and forecasts for global cities.
 
 | Capability | Type | Description |
 |-----------|------|-------------|
-| `query_weather` | Command | Get current weather for any city |
-| `refresh` | Command | Force refresh cached data |
+| `get_weather` | Command | Get current weather for any city |
+| **Dashboard Component** | UI | Beautiful weather card with dynamic gradients |
 
-**Metrics**: temperature_c, humidity_percent, wind_speed_kmph, cloud_cover_percent
+**Metrics**: temperature, humidity, wind_speed
+
+**Features**:
+- Real-time weather using Open-Meteo API (free, no API key required)
+- Beautiful dashboard component with gradient backgrounds that change based on weather
+- City search with auto-refresh capability
+- Temperature unit selection (Celsius/Fahrenheit)
 
 **Installation**:
 ```bash
-# Via marketplace (in NeoMind UI)
-# Or manual:
+# Build and install
+cargo build --release -p neomind-weather-forecast
 cp target/release/libneomind_extension_weather_forecast.dylib ~/.neomind/extensions/
+cp -r extensions/weather-forecast/frontend/dist ~/.neomind/extensions/weather-forecast/frontend/
+
+# Or via marketplace (in NeoMind UI)
 ```
 
 ---
@@ -310,6 +428,20 @@ Detailed metadata for each extension:
 ## For Developers: Creating Extensions
 
 See [EXTENSION_GUIDE.md](EXTENSION_GUIDE.md) for complete documentation.
+
+### ⚠️ Critical Safety Requirements
+
+**Extensions MUST be compiled with `panic = "unwind"` (NOT "abort")**
+
+```toml
+# In your workspace Cargo.toml
+[profile.release]
+opt-level = 3
+lto = "thin"
+panic = "unwind"  # REQUIRED for safety!
+```
+
+If your extension uses `panic = "abort"`, any panic will crash the entire NeoMind server instead of being safely caught.
 
 ### Quick Start
 

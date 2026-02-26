@@ -20,4 +20,10 @@ chrono = { workspace = true }
 semver = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-once_cell = "1.19"
+once_cell = { workspace = true }
+base64 = "0.21"
+image = "0.25"
+ndarray = "0.17"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ort = { version = "2.0.0-rc.11", features = ["half"] }

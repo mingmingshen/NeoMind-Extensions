@@ -1,21 +1,16 @@
 [package]
-name = "neomind-weather-forecast"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-description = "Weather forecast extension for NeoMind"
-publish = false
+name = "weather-forecast"
+version = "0.1.0"
+edition = "2021"
 
 [lib]
-name = "neomind_extension_weather_forecast"
 crate-type = ["cdylib"]
 
 [dependencies]
-neomind-core = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-async-trait = { workspace = true }
-once_cell = "1.19"
-semver = { version = "1", features = ["serde"] }
-tokio = { version = "1", features = ["sync"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+urlencoding = "2.1"
+
+[profile.release]
+opt-level = "s"     # Optimize for size
+lto = true          # Link-time optimization
