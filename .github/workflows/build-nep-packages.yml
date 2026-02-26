@@ -36,6 +36,12 @@ jobs:
           toolchain: stable
           override: true
 
+      - name: Setup symlink for neomind-core
+        run: |
+          # Git submodule is checked out at NeoMind/
+          # Create symlink for ../NeoMind (expected by Cargo.toml)
+          ln -s NeoMind ../NeoMind
+
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zip jq
