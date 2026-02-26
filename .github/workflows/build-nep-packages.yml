@@ -68,6 +68,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: nep-packages-*
+          merge-multiple: false
 
       - name: Create Release
         env:
