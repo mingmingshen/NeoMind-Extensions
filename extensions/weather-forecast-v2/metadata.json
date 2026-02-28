@@ -16,6 +16,18 @@
     "components": ["WeatherCard"],
     "entrypoint": "weather-forecast-v2-components.umd.js"
   },
+  "builds": {
+    "darwin-aarch64": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.0.0/weather-forecast-v2-2.0.0-darwin_aarch64.nep",
+      "sha256": "",
+      "size": 1388586
+    },
+    "linux-x86_64": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.0.0/weather-forecast-v2-2.0.0-linux_amd64.nep",
+      "sha256": "",
+      "size": 1788014
+    }
+  },
   "commands": [
     {
       "name": "get_weather",

@@ -16,6 +16,18 @@
     "components": ["ImageAnalyzer"],
     "entrypoint": "image-analyzer-v2-components.umd.js"
   },
+  "builds": {
+    "darwin-aarch64": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.0.0/image-analyzer-v2-2.0.0-darwin_aarch64.nep",
+      "sha256": "",
+      "size": 19291669
+    },
+    "linux-x86_64": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.0.0/image-analyzer-v2-2.0.0-linux_amd64.nep",
+      "sha256": "",
+      "size": 20471930
+    }
+  },
   "commands": [
     {
       "name": "analyze_image",
