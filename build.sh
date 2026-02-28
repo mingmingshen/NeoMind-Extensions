@@ -234,10 +234,10 @@ if [ "$SKIP_PACKAGE" = false ] && [ "$BUILD_TYPE" = "release" ]; then
 }
 EOF
 
-        # Create .nep package
+        # Create .nep package (without top-level directory prefix)
         OUTPUT_FILE="dist/${ext}-${VERSION}.nep"
-        cd "$TEMP_DIR"
-        zip -r -q "$OLDPWD/$OUTPUT_FILE" "$ext"
+        cd "$PACKAGE_DIR"
+        zip -r -q "$OLDPWD/$OUTPUT_FILE" .
         cd - > /dev/null
 
         # Calculate checksum
