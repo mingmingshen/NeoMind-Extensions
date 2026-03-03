@@ -43,10 +43,11 @@ jobs:
       matrix:
         include:
           # macOS platforms
+          # NOTE: macos-latest and macos-14/15 are ARM64, macos-13 is the last Intel runner
           - os: macos-latest
             platform: darwin_aarch64
             target: aarch64-apple-darwin
-          - os: macos-15
+          - os: macos-13
             platform: darwin_x86_64
             target: x86_64-apple-darwin
           # Linux platforms
