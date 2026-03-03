@@ -130,6 +130,42 @@ cp -r extensions/weather-forecast-v2/frontend/dist ~/.neomind/extensions/weather
 
 ---
 
+## AI-Assisted Development with Claude Code
+
+### 🤖 Claude Code Skill
+
+Get AI-powered guidance for extension development! This repository includes a comprehensive **Claude Code skill** that provides intelligent assistance when developing NeoMind extensions.
+
+**Features:**
+- 🎯 **Automatic Guidance**: Claude automatically helps when you ask about extension development
+- 📚 **Complete Documentation**: Architecture, SDK API, frontend development guides
+- 💻 **Code Generation**: Generate boilerplate code and templates
+- 🔧 **Troubleshooting**: AI-assisted debugging and problem solving
+- 💡 **Best Practices**: Built-in knowledge of NeoMind patterns
+
+**Installation:**
+
+```bash
+# From repository root
+./skill/install.sh
+```
+
+**Usage:**
+
+Ask Claude naturally:
+- "How do I create a NeoMind extension?"
+- "Create a temperature sensor extension"
+- "Add a frontend component to my extension"
+
+Or invoke directly:
+```bash
+/neomind-extension [extension-name]
+```
+
+**📖 Learn More**: See [skill/README.md](skill/README.md) for complete documentation.
+
+---
+
 ## For Extension Developers
 
 ### Extension Structure
@@ -322,6 +358,15 @@ NeoMind-Extension/
 │   ├── image-analyzer-v2/      # Image analysis extension
 │   ├── yolo-video-v2/          # Video processing extension
 │   └── index.json              # Marketplace index
+├── skill/                      # Claude Code skill for AI-assisted development
+│   ├── install.sh              # Skill installation script
+│   ├── README.md               # Skill overview and quick start
+│   ├── GUIDE.md                # Complete skill documentation
+│   ├── QUICK_START.md          # Interactive examples
+│   └── neomind-extension/      # Skill package
+│       ├── SKILL.md            # Main skill instructions
+│       ├── reference/          # Architecture, SDK, frontend guides
+│       └── examples/           # Working code examples
 ├── Cargo.toml                  # Workspace configuration
 ├── EXTENSION_GUIDE.md          # Developer guide
 └── README.md                   # This file

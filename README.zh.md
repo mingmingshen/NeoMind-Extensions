@@ -96,6 +96,42 @@ cp target/release/libneomind_extension_yolo_video_v2.dylib ~/.neomind/extensions
 
 ---
 
+## AI 辅助开发（Claude Code）
+
+### 🤖 Claude Code 技能
+
+获得 AI 驱动的扩展开发指导！本仓库包含一个全面的 **Claude Code 技能**，可在开发 NeoMind 扩展时提供智能辅助。
+
+**功能特性：**
+- 🎯 **自动指导**：当您询问扩展开发问题时，Claude 会自动提供帮助
+- 📚 **完整文档**：架构、SDK API、前端开发指南
+- 💻 **代码生成**：生成样板代码和模板
+- 🔧 **故障排查**：AI 辅助调试和问题解决
+- 💡 **最佳实践**：内置 NeoMind 模式和标准知识
+
+**安装：**
+
+```bash
+# 从仓库根目录运行
+./skill/install.sh
+```
+
+**使用：**
+
+自然地向 Claude 提问：
+- "如何创建 NeoMind 扩展？"
+- "创建一个温度传感器扩展"
+- "为我的扩展添加前端组件"
+
+或直接调用：
+```bash
+/neomind-extension [扩展名称]
+```
+
+**📖 了解更多**：查看 [skill/README.md](skill/README.md) 获取完整文档。
+
+---
+
 ## 快速开始
 
 ### 前置条件
@@ -204,9 +240,19 @@ NeoMind-Extension/
 │   ├── image-analyzer-v2/      # 图像分析扩展
 │   ├── yolo-video-v2/          # 视频处理扩展
 │   └── index.json              # 市场索引
+├── skill/                      # Claude Code 技能（AI 辅助开发）
+│   ├── install.sh              # 技能安装脚本
+│   ├── README.md               # 技能总览和快速开始
+│   ├── GUIDE.md                # 完整技能文档
+│   ├── QUICK_START.md          # 交互式示例教程
+│   └── neomind-extension/      # 技能包（Claude 读取的文件）
+│       ├── SKILL.md            # 主技能指令
+│       ├── reference/          # 架构、SDK、前端指南
+│       └── examples/           # 工作示例代码
 ├── Cargo.toml                  # Workspace 配置
 ├── EXTENSION_GUIDE.md          # 开发者指南
-└── README.md                   # 本文件
+├── EXTENSION_GUIDE.zh.md       # 开发者指南（中文）
+└── README.md                   # 项目说明（英文）
 ```
 
 ---
