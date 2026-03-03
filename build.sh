@@ -537,8 +537,14 @@ if [ "$SKIP_PACKAGE" = false ] && [ "$BUILD_TYPE" = "release" ]; then
 
         echo "$MANIFEST_JSON" > "$PACKAGE_DIR/manifest.json"
 
-        # Create .nep package (without top-level directory prefix)
-        OUTPUT_FILE="dist/${ext}-${VERSION}.nep"
+        # Create .nep package with platform suffix for native extensions
+        if [ "$IS_WASM" = true ]; then
+            # WASM is cross-platform, no platform suffix needed
+            OUTPUT_FILE="dist/${ext}-${VERSION}.nep"
+        else
+            # Native extensions need platform suffix
+            OUTPUT_FILE="dist/${ext}-${VERSION}-${PLATFORM}.nep"
+        fi
         cd "$PACKAGE_DIR"
         zip -r -q "$OLDPWD/$OUTPUT_FILE" .
         cd - > /dev/null
@@ -554,7 +560,7 @@ if [ "$SKIP_PACKAGE" = false ] && [ "$BUILD_TYPE" = "release" ]; then
         # Cleanup
         rm -rf "$TEMP_DIR"
 
-        echo -e "  ${GREEN}✓${NC} $ext -> dist/${ext}-${VERSION}.nep"
+        echo -e "  ${GREEN}✓${NC} $ext -> dist/$(basename $OUTPUT_FILE)"
     done
 
     echo ""
