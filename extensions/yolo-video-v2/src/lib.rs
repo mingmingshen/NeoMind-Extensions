@@ -361,6 +361,72 @@ fn get_registry() -> &'static Mutex<StreamRegistry> {
 }
 
 // ============================================================================
+// MJPEG Frame Queue for Streaming
+// ============================================================================
+
+use std::collections::VecDeque;
+
+/// Frame queue for MJPEG streaming
+/// Keeps the latest N frames to ensure smooth playback
+pub struct FrameQueue {
+    frames: VecDeque<Vec<u8>>,
+    max_size: usize,
+    last_update: Instant,
+}
+
+impl FrameQueue {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            frames: VecDeque::with_capacity(max_size),
+            max_size,
+            last_update: Instant::now(),
+        }
+    }
+
+    /// Push a new frame, automatically removing old frames if queue is full
+    pub fn push(&mut self, frame: Vec<u8>) {
+        if self.frames.len() >= self.max_size {
+            self.frames.pop_front();
+        }
+        self.frames.push_back(frame);
+        self.last_update = Instant::now();
+    }
+
+    /// Get the latest frame without removing it
+    pub fn latest(&self) -> Option<&Vec<u8>> {
+        self.frames.back()
+    }
+
+    /// Check if queue has been updated recently
+    pub fn is_stale(&self, threshold: Duration) -> bool {
+        self.last_update.elapsed() > threshold
+    }
+}
+
+/// Global frame queue registry for MJPEG streaming
+type FrameQueues = HashMap<String, Arc<Mutex<FrameQueue>>>;
+static FRAME_QUEUES: std::sync::OnceLock<Mutex<FrameQueues>> = std::sync::OnceLock::new();
+
+fn get_frame_queues() -> &'static Mutex<FrameQueues> {
+    FRAME_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Get or create a frame queue for a session
+pub fn get_or_create_frame_queue(session_id: &str) -> Arc<Mutex<FrameQueue>> {
+    let mut queues = get_frame_queues().lock();
+    queues.entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(FrameQueue::new(3))))
+        .clone()
+}
+
+/// Remove frame queue for a session
+pub fn remove_frame_queue(session_id: &str) {
+    let mut queues = get_frame_queues().lock();
+    queues.remove(session_id);
+    tracing::debug!("Removed frame queue for session: {}", session_id);
+}
+
+// ============================================================================
 // Stream Processor
 // ============================================================================
 
@@ -1158,27 +1224,23 @@ impl Extension for YoloVideoProcessorV2 {
             }
         };
 
-        // CRITICAL: Frame throttling to prevent memory overflow
-        // If last frame was processed less than 100ms ago, drop this frame
+        // CRITICAL: Frame rate control to prevent memory overflow
+        // Drop frames that arrive too quickly, but don't return stale cached frames
         {
             let mut s = stream.lock();
             if let Some(last_time) = s.last_process_time {
                 let elapsed = start.duration_since(last_time);
-                if elapsed.as_millis() < 100 {  // Minimum 100ms between frames (max 10 FPS)
+                if elapsed.as_millis() < 50 {  // Minimum 50ms between frames (max 20 FPS)
                     s.dropped_frames += 1;
                     eprintln!("[YOLO] Frame {} dropped (too fast: {}ms), total dropped: {}",
                         chunk.sequence, elapsed.as_millis(), s.dropped_frames);
 
-                    // Return last frame if available
-                    if let Some(ref last_frame) = s.last_frame {
-                        return Ok(StreamResult::success(
-                            Some(chunk.sequence),
-                            chunk.sequence,
-                            last_frame.clone(),
-                            StreamDataType::Image { format: "jpeg".to_string() },
-                            0.0,  // Cached frame, no processing time
-                        ));
-                    }
+                    // ✨ CRITICAL FIX: Don't return any frame - just drop it
+                    // This prevents showing stale/frozen frames
+                    // Frontend will naturally keep displaying the last received frame
+                    return Err(ExtensionError::ExecutionFailed(
+                        "Frame rate too high, dropped".to_string()
+                    ));
                 }
             }
             s.last_process_time = Some(start);
@@ -1304,6 +1366,13 @@ impl Extension for YoloVideoProcessorV2 {
             s.last_frame = Some(output_jpeg.clone());
         }
 
+        // ✨ MJPEG: Push frame to queue for streaming
+        {
+            let queue = get_or_create_frame_queue(session_id);
+            queue.lock().push(output_jpeg.clone());
+            eprintln!("[YOLO] Frame pushed to MJPEG queue for session: {}", session_id);
+        }
+
         // Return the processed frame with detections in metadata
         let result = StreamResult::success(
             Some(chunk.sequence),
@@ -1328,6 +1397,9 @@ impl Extension for YoloVideoProcessorV2 {
 
         // Stop push if running
         self.stop_push(session_id).await?;
+
+        // ✨ MJPEG: Clean up frame queue
+        remove_frame_queue(session_id);
 
         // Get stats and remove stream
         let stats = {
@@ -1388,6 +1460,34 @@ pub fn get_stream_stats_public(stream_id: &str) -> Option<StreamStats> {
     } else {
         None
     }
+}
+
+// ============================================================================
+// MJPEG Streaming API
+// ============================================================================
+
+/// Get the latest frame from MJPEG queue
+/// This is used by the MJPEG HTTP streaming endpoint
+pub fn get_mjpeg_frame(session_id: &str) -> Option<Vec<u8>> {
+    let queues = get_frame_queues().lock();
+    if let Some(queue) = queues.get(session_id) {
+        queue.lock().latest().cloned()
+    } else {
+        None
+    }
+}
+
+/// Check if MJPEG queue exists and is active
+pub fn has_mjpeg_queue(session_id: &str) -> bool {
+    let queues = get_frame_queues().lock();
+    queues.contains_key(session_id)
+}
+
+/// Create a placeholder JPEG for when no frames are available
+pub fn create_placeholder_jpeg(width: u32, height: u32, _message: &str) -> Vec<u8> {
+    // Create a simple dark gray placeholder
+    let img = image::RgbImage::from_pixel(width, height, image::Rgb([40, 44, 52]));
+    encode_jpeg(&img, 70)
 }
 
 // ============================================================================
