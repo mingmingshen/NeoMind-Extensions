@@ -35,10 +35,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS platforms
           - os: macos-latest
             platform: darwin_aarch64
+            target: aarch64-apple-darwin
+          - os: macos-13
+            platform: darwin_x86_64
+            target: x86_64-apple-darwin
+          # Linux platforms
           - os: ubuntu-latest
             platform: linux_amd64
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            platform: linux_arm64
+            target: aarch64-unknown-linux-gnu
+          # Windows platform
+          - os: windows-latest
+            platform: windows_amd64
+            target: x86_64-pc-windows-msvc
 
     steps:
       - name: Checkout extension repo
