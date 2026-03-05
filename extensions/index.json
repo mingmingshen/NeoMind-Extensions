@@ -107,7 +107,12 @@
       "categories": ["demo", "wasm"],
       "type": "wasm",
       "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/wasm-demo",
-      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/wasm-demo/metadata.json"
+      "metadata_url": "https://raw.githubusercontent.com/camthink-ai/NeoMind-Extensions/main/extensions/wasm-demo/metadata.json",
+      "builds": {
+        "wasm": {
+          "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v1.0.0/wasm-demo-1.0.0.nep"
+        }
+      }
     }
   ]
 }
