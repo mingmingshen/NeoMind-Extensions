@@ -36,10 +36,11 @@ jobs:
       matrix:
         include:
           # macOS platforms
+          # Use macos-latest for ARM, cross-compile for x86_64
           - os: macos-latest
             platform: darwin_aarch64
             target: aarch64-apple-darwin
-          - os: macos-13-large
+          - os: macos-latest
             platform: darwin_x86_64
             target: x86_64-apple-darwin
           # Linux platforms
