@@ -68,7 +68,7 @@ impl Extension for WasmDemoExtension {
             ExtensionMetadata::new(
                 "wasm-demo",
                 "WASM Demo Extension",
-                Version::parse("1.0.0").unwrap(),
+                "1.0.0",
             )
             .with_description("A simple counter extension demonstrating WASM support")
             .with_author("NeoMind Team")
@@ -108,6 +108,7 @@ impl Extension for WasmDemoExtension {
                 ExtensionCommand {
                     name: "increment".to_string(),
                     display_name: "Increment".to_string(),
+                    description: "Increment the counter by the specified amount".to_string(),
                     payload_template: String::new(),
                     parameters: vec![
                         ParameterDefinition {
@@ -130,6 +131,7 @@ impl Extension for WasmDemoExtension {
                 ExtensionCommand {
                     name: "decrement".to_string(),
                     display_name: "Decrement".to_string(),
+                    description: "Decrement the counter by the specified amount".to_string(),
                     payload_template: String::new(),
                     parameters: vec![
                         ParameterDefinition {
@@ -152,6 +154,7 @@ impl Extension for WasmDemoExtension {
                 ExtensionCommand {
                     name: "reset".to_string(),
                     display_name: "Reset".to_string(),
+                    description: "Reset the counter to zero".to_string(),
                     payload_template: String::new(),
                     parameters: Vec::new(),
                     fixed_values: std::collections::HashMap::new(),
@@ -162,6 +165,7 @@ impl Extension for WasmDemoExtension {
                 ExtensionCommand {
                     name: "get".to_string(),
                     display_name: "Get".to_string(),
+                    description: "Get the current counter value".to_string(),
                     payload_template: String::new(),
                     parameters: Vec::new(),
                     fixed_values: std::collections::HashMap::new(),
