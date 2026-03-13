@@ -139,6 +139,21 @@ fi
 if [ -f "extensions/$EXTENSION_NAME/metadata.json" ]; then
     cp "extensions/$EXTENSION_NAME/metadata.json" "$PACKAGE_DIR/manifest.json"
     echo "✓ Copied manifest.json"
+    
+    # Add binaries field to manifest.json
+    # Use jq if available, otherwise use sed
+    if command -v jq &> /dev/null; then
+        jq --arg platform "$PLATFORM_ARCH" --arg binary "binaries/extension.$LIB_EXT" \
+            '.binaries = {($platform): $binary}' \
+            "$PACKAGE_DIR/manifest.json" > "$PACKAGE_DIR/manifest.json.tmp" && \
+            mv "$PACKAGE_DIR/manifest.json.tmp" "$PACKAGE_DIR/manifest.json"
+        echo "✓ Added binaries field to manifest.json"
+    else
+        # Fallback: use sed to add binaries field before the closing brace
+        sed -i.bak "s/}$/\"binaries\": {\"$PLATFORM_ARCH\": \"binaries\/extension.$LIB_EXT\"},\n}/" "$PACKAGE_DIR/manifest.json"
+        rm -f "$PACKAGE_DIR/manifest.json.bak"
+        echo "✓ Added binaries field to manifest.json (using sed)"
+    fi
 else
     echo "⚠ Warning: No metadata.json found"
 fi

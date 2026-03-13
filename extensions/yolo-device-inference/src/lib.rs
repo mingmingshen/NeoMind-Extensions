@@ -338,7 +338,9 @@ impl YoloDeviceInference {
         // Expected path: <extension_dir>/models/<filename>
         
         // Try NEOMIND_EXTENSION_DIR first
+        eprintln!("[YoloDeviceInference] Checking NEOMIND_EXTENSION_DIR env var");
         if let Ok(ext_dir) = std::env::var("NEOMIND_EXTENSION_DIR") {
+            eprintln!("[YoloDeviceInference] NEOMIND_EXTENSION_DIR = {}", ext_dir);
             let path = std::path::PathBuf::from(&ext_dir).join("models").join(filename);
             if path.exists() {
                 return Ok(path);
@@ -651,8 +653,12 @@ impl YoloDeviceInference {
         let config = self.get_config();
 
         // Get extension directory from environment
+        eprintln!("[YoloDeviceInference] Checking NEOMIND_EXTENSION_DIR env var");
         if let Ok(ext_dir) = std::env::var("NEOMIND_EXTENSION_DIR") {
+            eprintln!("[YoloDeviceInference] NEOMIND_EXTENSION_DIR = {}", ext_dir);
             let config_path = std::path::PathBuf::from(&ext_dir).join("config.json");
+            eprintln!("[YoloDeviceInference] config_path = {:?}", config_path);
+            eprintln!("[YoloDeviceInference] config_path.exists() = {}", config_path.exists());
 
             match serde_json::to_string_pretty(&config) {
                 Ok(json) => {
@@ -673,24 +679,56 @@ impl YoloDeviceInference {
 
     /// Load configuration from file
     fn load_config_from_file(&self) -> Option<YoloConfig> {
-        if let Ok(ext_dir) = std::env::var("NEOMIND_EXTENSION_DIR") {
-            let config_path = std::path::PathBuf::from(&ext_dir).join("config.json");
+        eprintln!("[YoloDeviceInference] load_config_from_file called");
+        eprintln!("[YoloDeviceInference] Current working directory: {:?}", std::env::current_dir());
+        
+        // Since the working directory is set to the extension directory,
+        // we can directly use "config.json" in the current directory
+        let config_path = std::path::PathBuf::from("config.json");
+        eprintln!("[YoloDeviceInference] config_path = {:?}", config_path);
+        eprintln!("[YoloDeviceInference] config_path.exists() = {}", config_path.exists());
 
-            if config_path.exists() {
-                match std::fs::read_to_string(&config_path) {
-                    Ok(json) => {
-                        match serde_json::from_str::<YoloConfig>(&json) {
-                            Ok(config) => {
-                                tracing::debug!("[YoloDeviceInference] Loaded config from {:?}", config_path);
-                                return Some(config);
-                            }
-                            Err(e) => {
-                                tracing::warn!("[YoloDeviceInference] Failed to parse config file: {}", e);
-                            }
+        if config_path.exists() {
+            match std::fs::read_to_string(&config_path) {
+                Ok(json) => {
+                    eprintln!("[YoloDeviceInference] Read config file successfully, length = {}", json.len());
+                    match serde_json::from_str::<YoloConfig>(&json) {
+                        Ok(config) => {
+                            eprintln!("[YoloDeviceInference] Parsed config successfully, bindings = {}", config.bindings.len());
+                            return Some(config);
+                        }
+                        Err(e) => {
+                            eprintln!("[YoloDeviceInference] Failed to parse config file: {}", e);
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("[YoloDeviceInference] Failed to read config file: {}", e);
+                }
+                Err(e) => {
+                    eprintln!("[YoloDeviceInference] Failed to read config file: {}", e);
+                }
+            }
+        } else {
+            // Also try using NEOMIND_EXTENSION_DIR as fallback
+            if let Ok(ext_dir) = std::env::var("NEOMIND_EXTENSION_DIR") {
+                eprintln!("[YoloDeviceInference] Trying NEOMIND_EXTENSION_DIR: {}", ext_dir);
+                let alt_config_path = std::path::PathBuf::from(&ext_dir).join("config.json");
+                eprintln!("[YoloDeviceInference] alt_config_path = {:?}, exists = {}", alt_config_path, alt_config_path.exists());
+                
+                if alt_config_path.exists() {
+                    match std::fs::read_to_string(&alt_config_path) {
+                        Ok(json) => {
+                            match serde_json::from_str::<YoloConfig>(&json) {
+                                Ok(config) => {
+                                    eprintln!("[YoloDeviceInference] Loaded config from alt path, bindings = {}", config.bindings.len());
+                                    return Some(config);
+                                }
+                                Err(e) => {
+                                    eprintln!("[YoloDeviceInference] Failed to parse alt config file: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[YoloDeviceInference] Failed to read alt config file: {}", e);
+                        }
                     }
                 }
             }
@@ -700,16 +738,20 @@ impl YoloDeviceInference {
 
     /// Load configuration from persisted state
     pub fn load_config(&self, config: &YoloConfig) -> Result<()> {
+        eprintln!("[YoloDeviceInference] load_config called with {} bindings", config.bindings.len());
+        
         // Load settings
         *self.default_confidence.lock() = config.default_confidence;
         *self.model_version.lock() = config.model_version.clone();
 
         // Load bindings
         for binding in &config.bindings {
-            tracing::debug!("[YoloDeviceInference] Loading persisted binding for device: {}", binding.device_id);
+            eprintln!("[YoloDeviceInference] Loading binding for device: {}, image_metric: {}", binding.device_id, binding.image_metric);
 
             // Add to bindings
             self.bindings.write().insert(binding.device_id.clone(), binding.clone());
+            
+            eprintln!("[YoloDeviceInference] Binding inserted, current bindings count: {}", self.bindings.read().len());
 
             // Initialize stats
             self.binding_stats.write().insert(binding.device_id.clone(), BindingStatus {
@@ -724,7 +766,7 @@ impl YoloDeviceInference {
             });
         }
 
-        tracing::debug!("[YoloDeviceInference] Loaded {} persisted bindings", config.bindings.len());
+        eprintln!("[YoloDeviceInference] Loaded {} persisted bindings, total in map: {}", config.bindings.len(), self.bindings.read().len());
         Ok(())
     }
 
@@ -737,6 +779,7 @@ impl YoloDeviceInference {
         result: &InferenceResult,
         image_b64: &str,
         result_metric_prefix: &str,
+        ctx: &neomind_extension_sdk::capabilities::CapabilityContext,
     ) {
         // Update binding stats
         if let Some(stats) = self.binding_stats.write().get_mut(device_id) {
@@ -749,94 +792,47 @@ impl YoloDeviceInference {
             }
         }
 
-        // Write virtual metrics using the SDK capability
-        if let Some(ctx) = self.get_context() {
-            let device_id_owned = device_id.to_string();
-            let prefix = result_metric_prefix.to_string();
-            let detections = result.detections.clone();
-            let inference_time = result.inference_time_ms;
-            let annotated_image = result.annotated_image_base64.clone();
+        // Write virtual metrics using the CapabilityContext
+        // Virtual metrics must start with: transform., virtual., computed., derived., or aggregated.
+        eprintln!("[YoloDeviceInference] Writing virtual metrics for device: {}", device_id);
 
-            // Use tokio::task::block_in_place to run async code in sync context
-            std::thread::spawn(move || {
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    let ctx_clone = ctx.clone();
-                    tokio::task::block_in_place(|| {
-                        handle.block_on(async {
-                            // Write detection count
-                            let metric_name = format!("{}detections", prefix);
-                            if let Err(e) = device::write_virtual_metric_typed(
-                                &ctx_clone,
-                                &device_id_owned,
-                                &metric_name,
-                                detections.len() as i64,
-                            ).await {
-                                tracing::warn!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e);
-                            }
-
-                            // Write inference time
-                            let metric_name = format!("{}inference_time_ms", prefix);
-                            if let Err(e) = device::write_virtual_metric_typed(
-                                &ctx_clone,
-                                &device_id_owned,
-                                &metric_name,
-                                inference_time as f64,
-                            ).await {
-                                tracing::warn!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e);
-                            }
-
-                            // Write detection labels as JSON
-                            let labels: Vec<&str> = detections.iter().map(|d| d.label.as_str()).collect();
-                            let metric_name = format!("{}labels", prefix);
-                            if let Err(e) = device::write_virtual_metric(
-                                &ctx_clone,
-                                &device_id_owned,
-                                &metric_name,
-                                &serde_json::to_value(&labels).unwrap_or_default(),
-                            ).await {
-                                tracing::warn!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e);
-                            }
-
-                            // Write annotated image (base64)
-                            if let Some(img) = annotated_image {
-                                let metric_name = format!("{}annotated_image", prefix);
-                                if let Err(e) = device::write_virtual_metric(
-                                    &ctx_clone,
-                                    &device_id_owned,
-                                    &metric_name,
-                                    &serde_json::json!(img),
-                                ).await {
-                                    tracing::warn!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e);
-                                }
-                            }
-
-                            tracing::debug!("[YoloDeviceInference] Virtual metrics written for device: {} (detections: {})",
-                                device_id_owned, detections.len());
-                        });
-                    });
-                } else {
-                    tracing::debug!("[YoloDeviceInference] No tokio runtime, virtual metrics will be available via polling");
-                }
-            });
-        } else {
-            tracing::warn!("[YoloDeviceInference] Context not available, skipping virtual metric write for device: {}", device_id);
+        // Write detection count (virtual metric)
+        let metric_name = "virtual.yolo.detections";
+        match ctx.write_virtual_metric_typed(device_id, metric_name, result.detections.len() as i64) {
+            Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
+            Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
         }
+
+        // Write inference time (virtual metric)
+        let metric_name = "virtual.yolo.inference_time_ms";
+        match ctx.write_virtual_metric_typed(device_id, metric_name, result.inference_time_ms as f64) {
+            Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
+            Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
+        }
+
+        // Write detection labels as JSON (virtual metric)
+        let labels: Vec<&str> = result.detections.iter().map(|d| d.label.as_str()).collect();
+        let metric_name = "virtual.yolo.labels";
+        match ctx.write_virtual_metric(device_id, metric_name, &serde_json::to_value(&labels).unwrap_or_default()) {
+            Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
+            Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
+        }
+
+        // Write annotated image (virtual metric) with proper data URI format
+        if let Some(img) = &result.annotated_image_base64 {
+            let metric_name = "virtual.yolo.annotated_image";
+            // Add data URI prefix for proper image display
+            let data_uri = format!("data:image/jpeg;base64,{}", img);
+            match ctx.write_virtual_metric(device_id, metric_name, &serde_json::json!(data_uri)) {
+                Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
+                Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
+            }
+        }
+
+        eprintln!("[YoloDeviceInference] Virtual metrics written for device: {} (detections: {})", device_id, result.detections.len());
     }
 
     /// Extract image data from a value, supporting nested paths
-    ///
-    /// This method handles multiple value formats:
-    /// 1. Direct string: "base64data"
-    /// 2. MetricValue wrapper: {"String": "base64data"}
-    /// 3. Nested object with path: {"image": "base64data"} when nested_path is "image"
-    /// 4. Data URL format: "data:image/jpeg;base64,base64data"
-    /// Extract image data from a value, supporting nested paths
-    ///
-    /// This method handles multiple value formats:
-    /// 1. Direct string: "base64data"
-    /// 2. MetricValue wrapper: {"String": "base64data"}
-    /// 3. Nested object with path: {"image": "base64data"} when nested_path is "image"
-    /// 4. Data URL format: "data:image/jpeg;base64,base64data"
     pub fn extract_image_from_value<'a>(&self, value: Option<&'a serde_json::Value>, nested_path: Option<&str>) -> Option<String> {
         let v = value?;
 
@@ -866,9 +862,9 @@ impl YoloDeviceInference {
                     if let Some(s) = target_value.get(field).and_then(|s| s.as_str()) {
                         return Some(s.to_string());
                     }
-        }
-        None
-    }
+                }
+                None
+            }
         };
 
         // Process the string - handle data URL format
@@ -1195,7 +1191,16 @@ impl Extension for YoloDeviceInference {
     ///
     /// This method is called by the system when a DeviceMetric event is published.
     /// It checks if the device is bound and processes the image data.
-    fn handle_event(&self, event_type: &str, payload: &serde_json::Value) -> Result<()> {
+    fn handle_event_with_context(
+        &self,
+        event_type: &str,
+        payload: &serde_json::Value,
+        ctx: &neomind_extension_sdk::capabilities::CapabilityContext,
+    ) -> Result<()> {
+        eprintln!("[YoloDeviceInference] handle_event_with_context called: event_type={}", event_type);
+        tracing::info!("[YoloDeviceInference] handle_event_with_context called: event_type={}", event_type);
+
+        eprintln!("[YoloDeviceInference] Checking event_type: {}", event_type);
         if event_type != "DeviceMetric" {
             return Ok(());
         }
@@ -1211,13 +1216,29 @@ impl Extension for YoloDeviceInference {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
 
+        eprintln!("[YoloDeviceInference] Processing: device={}, metric={}", device_id, metric);
+        tracing::info!("[YoloDeviceInference] Processing: device={}, metric={}", device_id, metric);
+
         let value = inner_payload.get("value");
 
         // Check if this device is bound
-        let binding = self.bindings.read().get(device_id).cloned();
+        let bindings = self.bindings.read();
+        let binding = bindings.get(device_id).cloned();
+        eprintln!("[YoloDeviceInference] Looking up device {}, bindings map has {} entries", device_id, bindings.len());
 
+        eprintln!("[YoloDeviceInference] Checking binding for device: {}", device_id);
+        if binding.is_none() {
+            // Log available bindings for debugging
+            let bindings = self.bindings.read();
+            let bound_devices: Vec<&String> = bindings.keys().collect();
+            eprintln!("[YoloDeviceInference] Device {} not bound. Bound devices: {:?}", device_id, bound_devices);
+        }
+
+        eprintln!("[YoloDeviceInference] Found binding for device: {}", device_id);
         if let Some(binding) = binding {
+            eprintln!("[YoloDeviceInference] Binding active: {}", binding.active);
             if !binding.active {
+                tracing::debug!("[YoloDeviceInference] Binding inactive for device: {}", device_id);
                 return Ok(());
             }
 
@@ -1234,20 +1255,34 @@ impl Extension for YoloDeviceInference {
             let metric_matches = exact_match || metric == top_level_metric;
             let nested_path = if exact_match { None } else { nested_path };
 
+            eprintln!("[YoloDeviceInference] Event: device={}, metric={}, binding_metric={}, exact={}, top_level={}, matches={}",
+                device_id, metric, binding.image_metric, exact_match, top_level_metric, metric_matches);
+            tracing::info!(
+                "[YoloDeviceInference] Event: device={}, metric={}, binding_metric={}, exact={}, top_level={}, matches={}",
+                device_id, metric, binding.image_metric, exact_match, top_level_metric, metric_matches
+            );
+
             if !metric_matches {
                 return Ok(());
             }
 
+            eprintln!("[YoloDeviceInference] Metric matched! Extracting image data...");
+            
             // Extract image data from value
             let image_b64 = self.extract_image_from_value(value, nested_path.as_deref());
+            
+            eprintln!("[YoloDeviceInference] extract_image_from_value returned: {:?}", image_b64.as_ref().map(|s| format!("{} bytes", s.len())));
 
             if let Some(image_data_b64) = image_b64 {
                 match base64::engine::general_purpose::STANDARD.decode(&image_data_b64) {
                     Ok(image_data) => {
+                        eprintln!("[YoloDeviceInference] Base64 decoded successfully, image size: {} bytes", image_data.len());
                         #[cfg(not(target_arch = "wasm32"))]
                         {
+                            eprintln!("[YoloDeviceInference] Calling process_image...");
                             match self.process_image(device_id, &image_data, binding.draw_boxes) {
                                 Ok(result) => {
+                                    eprintln!("[YoloDeviceInference] process_image returned {} detections", result.detections.len());
                                     self.total_inferences.fetch_add(1, Ordering::SeqCst);
                                     self.total_detections.fetch_add(result.detections.len() as u64, Ordering::SeqCst);
                                     self.write_inference_results(
@@ -1255,6 +1290,7 @@ impl Extension for YoloDeviceInference {
                                         &result,
                                         &image_data_b64,
                                         &binding.result_metric_prefix,
+                                        ctx,
                                     );
                                     tracing::debug!(
                                         "[YoloDeviceInference] Inference: device={}, detections={}, time={}ms",
@@ -1503,6 +1539,7 @@ impl Extension for YoloDeviceInference {
     /// This is called by the system when the extension is loaded.
     /// It loads persisted bindings and configuration.
     async fn configure(&mut self, config: &serde_json::Value) -> Result<()> {
+        eprintln!("[YoloDeviceInference] configure called with config: {:?}", config);
         // First, try to load from file (for isolated extensions)
         if let Some(file_config) = self.load_config_from_file() {
             tracing::debug!("[YoloDeviceInference] Loading persisted configuration from file with {} bindings", file_config.bindings.len());

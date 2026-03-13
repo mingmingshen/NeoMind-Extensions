@@ -13,9 +13,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::collections::HashMap;
-use semver::Version;
 use base64::Engine;
 use parking_lot::Mutex;
+
+#[cfg(not(target_arch = "wasm32"))]
+use semver::Version;
 
 #[cfg(not(target_arch = "wasm32"))]
 use usls::{models::YOLO, Config, DataLoader, Model, ORTConfig, Runtime, Version as YOLOVersion};
@@ -446,68 +448,26 @@ impl Extension for ImageAnalyzer {
     fn metadata(&self) -> &ExtensionMetadata {
         static META: std::sync::OnceLock<ExtensionMetadata> = std::sync::OnceLock::new();
         META.get_or_init(|| {
-            ExtensionMetadata::new(
-                "image-analyzer-v2",
-                "Image Analyzer V2",
-                Version::parse("2.0.0").unwrap()
-            )
-            .with_description("Image analysis with YOLOv8 via usls")
-            .with_author("NeoMind Team")
-            .with_config_parameters(vec![
-                ParameterDefinition {
-                    name: "confidence_threshold".to_string(),
-                    display_name: "Confidence Threshold".to_string(),
-                    description: "Minimum confidence for detections (0.0-1.0)".to_string(),
-                    param_type: MetricDataType::Float,
-                    required: false,
-                    default_value: Some(ParamMetricValue::Float(0.25)),
-                    min: Some(0.0),
-                    max: Some(1.0),
-                    options: Vec::new(),
-                },
-                ParameterDefinition {
-                    name: "nms_threshold".to_string(),
-                    display_name: "NMS Threshold".to_string(),
-                    description: "IoU threshold for Non-Maximum Suppression (0.0-1.0)".to_string(),
-                    param_type: MetricDataType::Float,
-                    required: false,
-                    default_value: Some(ParamMetricValue::Float(0.45)),
-                    min: Some(0.0),
-                    max: Some(1.0),
-                    options: Vec::new(),
-                },
-                ParameterDefinition {
-                    name: "model_version".to_string(),
-                    display_name: "Model Version".to_string(),
-                    description: "YOLO model version and scale (e.g., v8-n, v8-s, v8-m)".to_string(),
-                    param_type: MetricDataType::Enum {
-                        options: vec![
-                            "v8-n".to_string(),
-                            "v8-s".to_string(),
-                            "v8-m".to_string(),
-                            "v8-l".to_string(),
-                            "v8-x".to_string(),
-                            "v11-n".to_string(),
-                            "v11-s".to_string(),
-                            "v11-m".to_string(),
-                        ],
-                    },
-                    required: false,
-                    default_value: Some(ParamMetricValue::String("v8-n".to_string())),
-                    min: None,
-                    max: None,
-                    options: vec![
-                        "v8-n".to_string(),
-                        "v8-s".to_string(),
-                        "v8-m".to_string(),
-                        "v8-l".to_string(),
-                        "v8-x".to_string(),
-                        "v11-n".to_string(),
-                        "v11-s".to_string(),
-                        "v11-m".to_string(),
-                    ],
-                },
-            ])
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ExtensionMetadata::new(
+                    "image-analyzer-v2",
+                    "Image Analyzer V2",
+                    Version::parse("2.0.0").unwrap()
+                )
+                .with_description("Image analysis with YOLOv8 via usls")
+                .with_author("NeoMind Team")
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                ExtensionMetadata::new(
+                    "image-analyzer-v2",
+                    "Image Analyzer V2",
+                    "2.0.0"
+                )
+                .with_description("Image analysis with YOLOv8 via usls")
+                .with_author("NeoMind Team")
+            }
         })
     }
 
@@ -607,7 +567,16 @@ impl Extension for ImageAnalyzer {
     }
 
     fn produce_metrics(&self) -> Result<Vec<ExtensionMetricValue>> {
+        // Get current timestamp - use wasmbind for WASM compatibility
+        #[cfg(not(target_arch = "wasm32"))]
         let now = chrono::Utc::now().timestamp_millis();
+        
+        #[cfg(target_arch = "wasm32")]
+        let now = {
+            // For WASM, use js_sys for timestamp
+            js_sys::Date::now() as i64
+        };
+        
         let images = self.images_processed.load(Ordering::SeqCst);
         let total_time = self.total_processing_time_ms.load(Ordering::SeqCst);
         let avg_time = if images > 0 {
@@ -671,33 +640,7 @@ impl Extension for ImageAnalyzer {
         }
     }
 
-    async fn configure(&mut self, config: &serde_json::Value) -> Result<()> {
-        // Update confidence threshold
-        if let Some(conf) = config.get("confidence_threshold").and_then(|v| v.as_f64()) {
-            *self.confidence_threshold.lock() = conf as f32;
-        }
-
-        // Update NMS threshold
-        if let Some(nms) = config.get("nms_threshold").and_then(|v| v.as_f64()) {
-            *self.nms_threshold.lock() = nms as f32;
-        }
-
-        // Update model version
-        if let Some(version) = config.get("model_version").and_then(|v| v.as_str()) {
-            *self.model_version.lock() = version.to_string();
-        }
-
-        // Reload model with new configuration
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Err(e) = self.reload_model() {
-                tracing::warn!("[ImageAnalyzer] Failed to reload model after config change: {}", e);
-            }
-        }
-
-        Ok(())
-    }
-
+    #[cfg(not(target_arch = "wasm32"))]
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

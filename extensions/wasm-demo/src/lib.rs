@@ -30,7 +30,6 @@ use neomind_extension_sdk::{
     MetricDescriptor, ExtensionCommand, MetricDataType, ParameterDefinition,
     ParamMetricValue, Result,
 };
-use neomind_extension_sdk::prelude::Version;
 
 // ============================================================================
 // Extension Implementation
@@ -68,7 +67,7 @@ impl Extension for WasmDemoExtension {
             ExtensionMetadata::new(
                 "wasm-demo",
                 "WASM Demo Extension",
-                Version::parse("1.0.0").unwrap(),
+                "1.0.0",
             )
             .with_description("A simple counter extension demonstrating WASM support")
             .with_author("NeoMind Team")
@@ -228,10 +227,6 @@ impl Extension for WasmDemoExtension {
                 timestamp: now,
             },
         ])
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

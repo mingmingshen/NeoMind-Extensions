@@ -16,19 +16,25 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = "1"
 async-trait = "0.1"
-chrono = "0.4"
 semver = "1"
 base64 = "0.22"
 image = "0.25"
 ndarray = "0.17"
 parking_lot = "0.12"
 tracing = "0.1"
-tokio = { version = "1", features = ["rt-multi-thread"] }
 
+# Native-only dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread"] }
 ort = { version = "2.0.0-rc.11", features = ["half"] }
 usls = { version = "0.2.0-alpha.3", default-features = false, features = ["ort-download-binaries", "vision"] }
 reqwest = { version = "0.12", features = ["blocking"] }
+
+# WASM-only dependencies
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
+js-sys = "0.3"
 
 [features]
 default = []
