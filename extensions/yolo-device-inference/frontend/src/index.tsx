@@ -69,6 +69,7 @@ interface BindingStatus {
   last_error: string | null
   last_image?: string
   last_detections?: Detection[]
+  last_annotated_image?: string
 }
 
 interface ExtensionStatus {
@@ -528,7 +529,8 @@ function drawDetections(
       resolve()
     }
     img.onerror = () => resolve()
-    img.src = `data:image/jpeg;base64,${imageBase64}`
+    // Handle both data URI and raw base64
+    img.src = imageBase64.startsWith("data:") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`
   })
 }
 
@@ -623,12 +625,14 @@ const DeviceInferenceCard = forwardRef<HTMLDivElement, ExtensionComponentProps>(
       return () => clearInterval(interval)
     }, [refresh])
 
-    // Draw detections when image updates
+    // Draw detections when annotated image is available
     useEffect(() => {
-      if (binding?.last_image && binding?.last_detections && canvasRef.current) {
-        drawDetections(canvasRef.current, binding.last_image, binding.last_detections, displayMode)
+      if (binding?.last_annotated_image && binding?.last_detections && canvasRef.current) {
+        // Extract base64 data from data URI
+        const imageData = binding.last_annotated_image
+        drawDetections(canvasRef.current, imageData, binding.last_detections, displayMode)
       }
-    }, [binding?.last_image, binding?.last_detections, displayMode])
+    }, [binding?.last_annotated_image, binding?.last_detections, displayMode])
 
     // Bind device
     const handleBind = async () => {

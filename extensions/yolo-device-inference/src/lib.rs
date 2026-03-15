@@ -798,14 +798,16 @@ impl YoloDeviceInference {
 
         // Write detection count (virtual metric)
         let metric_name = "virtual.yolo.detections";
-        match ctx.write_virtual_metric_typed(device_id, metric_name, result.detections.len() as i64) {
+        // Use sync version since we're not in an async context
+        use neomind_extension_sdk::capabilities::device;
+        match device::write_virtual_metric_typed_sync(device_id, metric_name, result.detections.len() as i64, Some(result.timestamp)) {
             Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
             Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
         }
 
         // Write inference time (virtual metric)
         let metric_name = "virtual.yolo.inference_time_ms";
-        match ctx.write_virtual_metric_typed(device_id, metric_name, result.inference_time_ms as f64) {
+        match device::write_virtual_metric_typed_sync(device_id, metric_name, result.inference_time_ms as f64, Some(result.timestamp)) {
             Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
             Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
         }
@@ -813,7 +815,7 @@ impl YoloDeviceInference {
         // Write detection labels as JSON (virtual metric)
         let labels: Vec<&str> = result.detections.iter().map(|d| d.label.as_str()).collect();
         let metric_name = "virtual.yolo.labels";
-        match ctx.write_virtual_metric(device_id, metric_name, &serde_json::to_value(&labels).unwrap_or_default()) {
+        match device::write_virtual_metric_sync(device_id, metric_name, &serde_json::to_value(&labels).unwrap_or_default(), Some(result.timestamp)) {
             Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
             Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
         }
@@ -823,7 +825,7 @@ impl YoloDeviceInference {
             let metric_name = "virtual.yolo.annotated_image";
             // Add data URI prefix for proper image display
             let data_uri = format!("data:image/jpeg;base64,{}", img);
-            match ctx.write_virtual_metric(device_id, metric_name, &serde_json::json!(data_uri)) {
+            match device::write_virtual_metric_sync(device_id, metric_name, &serde_json::json!(data_uri), Some(result.timestamp)) {
                 Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
                 Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
             }
@@ -1191,7 +1193,7 @@ impl Extension for YoloDeviceInference {
     ///
     /// This method is called by the system when a DeviceMetric event is published.
     /// It checks if the device is bound and processes the image data.
-    fn handle_event_with_context(
+    async fn handle_event_with_context(
         &self,
         event_type: &str,
         payload: &serde_json::Value,
