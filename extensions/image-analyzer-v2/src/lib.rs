@@ -527,7 +527,6 @@ impl Extension for ImageAnalyzer {
                 samples: vec![
                     serde_json::json!({ "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" }),
                 ],
-                llm_hints: "Analyze an image and return detected objects with bounding boxes".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -538,7 +537,6 @@ impl Extension for ImageAnalyzer {
                 parameters: vec![],
                 fixed_values: HashMap::new(),
                 samples: Vec::new(),
-                llm_hints: "Reset extension statistics".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -549,7 +547,6 @@ impl Extension for ImageAnalyzer {
                 parameters: vec![],
                 fixed_values: HashMap::new(),
                 samples: Vec::new(),
-                llm_hints: "Get current model loading status and configuration".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -560,7 +557,6 @@ impl Extension for ImageAnalyzer {
                 parameters: vec![],
                 fixed_values: HashMap::new(),
                 samples: Vec::new(),
-                llm_hints: "Reload YOLO model with current configuration".to_string(),
                 parameter_groups: Vec::new(),
             },
         ]

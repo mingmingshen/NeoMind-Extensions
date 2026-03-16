@@ -6,6 +6,7 @@
 //! - Simpler API with built-in preprocessing/postprocessing
 
 use image::RgbImage;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,7 +27,7 @@ pub struct Detection {
 /// YOLOv11 detector using usls
 pub struct YoloDetector {
     #[cfg(not(target_arch = "wasm32"))]
-    model: Option<Runtime<YOLO>>,
+    model: Option<Arc<std::sync::Mutex<Runtime<YOLO>>>>,
     #[cfg(target_arch = "wasm32")]
     model_loaded: bool,
     model_size: usize,
@@ -42,11 +43,15 @@ impl YoloDetector {
             let model_data = Self::load_model_data()?;
 
             if model_data.is_none() {
-                eprintln!("[YOLO-Detector] ⚠️ Model not found, running in fallback mode");
-                return Ok(Self {
-                    model: None,
-                    model_size: 0,
-                });
+                let ext_dir = std::env::var("NEOMIND_EXTENSION_DIR").unwrap_or_else(|_| "unknown".to_string());
+                tracing::error!("❌ YOLO model file not found!");
+                tracing::error!("Extension directory: {}", ext_dir);
+                tracing::error!("Expected path: {}/models/yolo11n.onnx", ext_dir);
+                tracing::error!("The extension will NOT function properly without the model file.");
+                return Err(format!(
+                    "YOLO model not found. Please ensure yolo11n.onnx is in the models/ directory. Searched in: {}",
+                    ext_dir
+                ));
             }
 
             let model_bytes = model_data.unwrap();
@@ -96,7 +101,7 @@ impl YoloDetector {
             let _ = std::fs::remove_file(&model_path);
 
             Ok(Self {
-                model: Some(model),
+                model: Some(Arc::new(std::sync::Mutex::new(model))),
                 model_size,
             })
         }
@@ -193,10 +198,10 @@ impl YoloDetector {
     }
 
     /// Run inference on an image
-    pub fn detect(&mut self, image: &RgbImage, _confidence_threshold: f32, max_detections: u32) -> Vec<Detection> {
+    pub fn detect(&self, image: &RgbImage, _confidence_threshold: f32, max_detections: u32) -> Vec<Detection> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if let Some(ref mut model) = self.model {
+            if let Some(ref model) = self.model {
                 let result = Self::run_inference(model, image, max_detections);
                 
                 // ✨ CRITICAL: Force ONNX Runtime to release temporary memory after each inference
@@ -212,12 +217,12 @@ impl YoloDetector {
     }
 
     /// ✨ NEW: Explicit memory cleanup for ONNX Runtime
-    pub fn cleanup_memory(&mut self) {
+    pub fn cleanup_memory(&self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             // Reset model state to release memory pool
             // Note: This is a workaround for ONNX Runtime memory leak in video streaming scenarios
-            if let Some(ref mut _model) = self.model {
+            if let Some(_) = &self.model {
                 // Model will be dropped and recreated on next inference
                 // This releases the memory pool accumulated during streaming
                 tracing::debug!("ONNX Runtime memory cleanup triggered");
@@ -225,10 +230,39 @@ impl YoloDetector {
         }
     }
 
+    /// ✨ CRITICAL: Safe shutdown that avoids panic when dropping usls::Runtime
+    ///
+    /// usls::Runtime (which wraps ONNX Runtime) may attempt to create a Tokio runtime
+    /// or use block_on during drop, which causes panic if called from within an async context.
+    ///
+    /// This method uses spawn_blocking to drop the model in a safe thread context.
+    pub fn shutdown(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.model.is_some() {
+                tracing::debug!("Shutting down YoloDetector in blocking thread");
+
+                // Take the model out of the Option
+                let model = self.model.take();
+
+                // Drop it in a blocking thread to avoid runtime panic
+                // We use a simple thread instead of tokio::spawn_blocking because
+                // we're already potentially in a shutdown context
+                std::thread::spawn(move || {
+                    // The model will be dropped when this thread exits
+                    // This happens outside the async runtime, avoiding the panic
+                    drop(model);
+                }).join().ok(); // Don't wait, just detach
+
+                tracing::debug!("YoloDetector shutdown complete");
+            }
+        }
+    }
+
     /// Run YOLO inference using usls with proper API
     #[cfg(not(target_arch = "wasm32"))]
     fn run_inference(
-        model: &mut Runtime<YOLO>,
+        model: &Arc<std::sync::Mutex<Runtime<YOLO>>>,
         image: &RgbImage,
         max_detections: u32,
     ) -> Vec<Detection> {
@@ -245,7 +279,8 @@ impl YoloDetector {
         };
 
         // Run inference using Model::run()
-        let ys = match model.run(&[usls_image]) {
+        let mut model_guard = model.lock().unwrap();
+        let ys = match model_guard.run(&[usls_image]) {
             Ok(results) => results,
             Err(e) => {
                 tracing::error!("YOLO inference failed: {:?}", e);

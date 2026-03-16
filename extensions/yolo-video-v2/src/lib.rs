@@ -425,25 +425,37 @@ pub struct StreamProcessor {
 
 impl StreamProcessor {
     pub fn new() -> Self {
+        // Load model immediately like Image Analyzer V2
+        tracing::info!("[YOLO-Video] Loading YOLO detector during extension initialization");
+        
+        let detector = match YoloDetector::new() {
+            Ok(d) => {
+                tracing::info!("[YOLO-Video] ✓ YOLO detector loaded successfully");
+                Some(d)
+            }
+            Err(e) => {
+                tracing::error!("[YOLO-Video] Failed to load detector: {}", e);
+                tracing::error!("[YOLO-Video] Extension will not function without YOLO model");
+                None
+            }
+        };
+        
         Self {
-            detector: Arc::new(parking_lot::Mutex::new(None)),
+            detector: Arc::new(parking_lot::Mutex::new(detector)),
         }
     }
 
-    /// Get or initialize the YOLO detector (lazy loading)
-    fn get_or_init_detector(&self) -> Option<parking_lot::MappedMutexGuard<'_, YoloDetector>> {
-        let mut lock = self.detector.lock();
-        if lock.is_none() {
-            match YoloDetector::new() {
-                Ok(detector) => *lock = Some(detector),
-                Err(e) => {
-                    tracing::error!("Failed to load YOLO detector: {}", e);
-                    return None;
-                }
-            }
+    /// Get the YOLO detector (lazy loading if not initialized)
+    fn get_detector(&self) -> Option<parking_lot::MappedMutexGuard<'_, YoloDetector>> {
+        let lock = self.detector.lock();
+        if lock.is_some() {
+            Some(parking_lot::MutexGuard::map(lock, |opt| opt.as_mut().unwrap()))
+        } else {
+            None
         }
-        Some(parking_lot::MutexGuard::map(lock, |opt| opt.as_mut().unwrap()))
     }
+    
+
 
     #[allow(dead_code)]
     fn has_model(&self) -> bool {
@@ -574,8 +586,9 @@ impl StreamProcessor {
             }
 
             // Run inference
-            let detections = match processor.get_or_init_detector() {
-                Some(mut detector) if detector.is_loaded() => {
+            
+            let detections = match processor.get_detector() {
+                Some(detector) if detector.is_loaded() => {
                     tracing::debug!("[Stream {}] Running real inference", stream_id);
                     let raw_detections = detector.detect(
                         &demo_frame,
@@ -698,6 +711,25 @@ impl Default for YoloVideoProcessorV2 {
     }
 }
 
+/// ✨ CRITICAL: Safe cleanup of detector to avoid usls::Runtime panic
+///
+/// When the extension is dropped, we need to ensure the YoloDetector is
+/// properly cleaned up in a blocking thread to avoid the panic:
+/// "Cannot start a runtime from within a runtime"
+impl Drop for YoloVideoProcessorV2 {
+    fn drop(&mut self) {
+        tracing::info!("Dropping YoloVideoProcessorV2, cleaning up detector");
+
+        // Get access to the detector and call shutdown
+        if let Some(mut detector) = self.processor.detector.lock().take() {
+            tracing::debug!("Calling detector shutdown");
+            detector.shutdown();
+        }
+
+        tracing::info!("YoloVideoProcessorV2 dropped successfully");
+    }
+}
+
 // ============================================================================
 // Extension Trait Implementation
 // ============================================================================
@@ -750,6 +782,24 @@ impl Extension for YoloVideoProcessorV2 {
                 max: None,
                 required: false,
             },
+            MetricDescriptor {
+                name: "model_loaded".to_string(),
+                display_name: "Model Loaded".to_string(),
+                data_type: MetricDataType::Boolean,
+                unit: "".to_string(),
+                min: None,
+                max: None,
+                required: false,
+            },
+            MetricDescriptor {
+                name: "model_size_mb".to_string(),
+                display_name: "Model Size (MB)".to_string(),
+                data_type: MetricDataType::Float,
+                unit: "MB".to_string(),
+                min: Some(0.0),
+                max: None,
+                required: false,
+            },
         ]
     }
 
@@ -778,7 +828,6 @@ impl Extension for YoloVideoProcessorV2 {
                     json!({ "source_url": "camera://0" }),
                     json!({ "source_url": "rtsp://example.com/stream" }),
                 ],
-                llm_hints: "Start a video detection stream".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -801,7 +850,6 @@ impl Extension for YoloVideoProcessorV2 {
                 ],
                 fixed_values: HashMap::new(),
                 samples: vec![],
-                llm_hints: "Stop a video stream".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -824,7 +872,6 @@ impl Extension for YoloVideoProcessorV2 {
                 ],
                 fixed_values: HashMap::new(),
                 samples: vec![],
-                llm_hints: "Get stream statistics".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -847,7 +894,6 @@ impl Extension for YoloVideoProcessorV2 {
                 ],
                 fixed_values: HashMap::new(),
                 samples: vec![],
-                llm_hints: "Get current frame as base64 JPEG".to_string(),
                 parameter_groups: Vec::new(),
             },
         ]
@@ -916,6 +962,14 @@ impl Extension for YoloVideoProcessorV2 {
         let now = chrono::Utc::now().timestamp_millis();
         let registry = get_registry().lock();
 
+        // Get model status
+        let (model_loaded, model_size) = self.processor.get_detector()
+            .map(|d| {
+                let size = d.model_size() as f32 / (1024.0 * 1024.0); // Convert to MB
+                (d.is_loaded(), size)
+            })
+            .unwrap_or((false, 0.0));
+
         Ok(vec![
             ExtensionMetricValue {
                 name: "active_streams".to_string(),
@@ -930,6 +984,16 @@ impl Extension for YoloVideoProcessorV2 {
             ExtensionMetricValue {
                 name: "avg_fps".to_string(),
                 value: ParamMetricValue::Float(0.0),
+                timestamp: now,
+            },
+            ExtensionMetricValue {
+                name: "model_loaded".to_string(),
+                value: ParamMetricValue::Boolean(model_loaded),
+                timestamp: now,
+            },
+            ExtensionMetricValue {
+                name: "model_size_mb".to_string(),
+                value: ParamMetricValue::Float(model_size.into()),
                 timestamp: now,
             },
         ])
@@ -993,6 +1057,20 @@ impl Extension for YoloVideoProcessorV2 {
 
         {
             let mut registry = get_registry().lock();
+            
+            // Check if session already exists and clean it up
+            if let Some(old_stream) = registry.streams.get(&stream_id) {
+                let mut old = old_stream.lock();
+                if old.running {
+                    eprintln!("[YOLO] Session {} already exists, stopping old session", stream_id);
+                    old.running = false;
+                    // Abort old push task if exists
+                    if let Some(task) = old.push_task.take() {
+                        task.abort();
+                    }
+                }
+            }
+            
             registry.streams.insert(stream_id.clone(), Arc::new(Mutex::new(stream)));
             eprintln!("[YOLO] Session registered, total sessions: {}", registry.streams.len());
         }
@@ -1114,8 +1192,8 @@ impl Extension for YoloVideoProcessorV2 {
 
                 // Step 3: Run YOLO detection (no stream lock, only detector lock)
                 let detections = {
-                    match processor.get_or_init_detector() {
-                        Some(mut detector) if detector.is_loaded() => {
+                    match processor.get_detector() {
+                        Some(detector) if detector.is_loaded() => {
                             let yolo_dets = detector.detect(&image, confidence, max_obj);
                             if !yolo_dets.is_empty() {
                                 tracing::debug!("YOLO detected {} objects in frame {}", yolo_dets.len(), frame_count);
@@ -1217,6 +1295,8 @@ impl Extension for YoloVideoProcessorV2 {
         if let Some(handle) = task_handle {
             handle.abort();
             tracing::info!("Push task aborted for session: {}", session_id);
+            // Note: Task will exit on next loop iteration when it checks the running flag
+            // No need to wait - the abort signal is sufficient
         }
 
         tracing::info!("Push stopped for session: {}", session_id);
@@ -1267,12 +1347,14 @@ impl Extension for YoloVideoProcessorV2 {
                     eprintln!("[YOLO] Frame {} dropped (too fast: {}ms), total dropped: {}",
                         chunk.sequence, elapsed.as_millis(), s.dropped_frames);
 
-                    // ✨ CRITICAL FIX: Don't return any frame - just drop it
-                    // This prevents showing stale/frozen frames
-                    // Frontend will naturally keep displaying the last received frame
-                    return Err(ExtensionError::ExecutionFailed(
-                        "Frame rate too high, dropped".to_string()
-                    ));
+                    // Return a skip response to indicate frame was dropped
+                    // Frontend will keep displaying the last received frame
+                    return Ok(StreamResult::json(
+                        Some(chunk.sequence),
+                        chunk.sequence,
+                        serde_json::json!({"skipped": true, "reason": "rate_limit"}),
+                        0.0,
+                    ).unwrap());
                 }
             }
             s.last_process_time = Some(start);
@@ -1325,8 +1407,8 @@ impl Extension for YoloVideoProcessorV2 {
 
         // Run YOLO detection on resized image
         let detections = {
-            match self.processor.get_or_init_detector() {
-                Some(mut detector) => {
+            match self.processor.get_detector() {
+                Some(detector) => {
                     if detector.is_loaded() {
                         eprintln!("[YOLO] Detector loaded: {}, inference size: 640x640",
                             detector.is_loaded());

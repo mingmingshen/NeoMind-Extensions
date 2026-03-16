@@ -144,9 +144,9 @@ const STYLES = `
   min-height: 200px;
 }
 .yolo-video-frame {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .yolo-video-placeholder {
   display: flex;

@@ -119,7 +119,6 @@ impl Extension for WasmDemoExtension {
                 ],
                 fixed_values: std::collections::HashMap::new(),
                 samples: vec![json!({ "amount": 1 })],
-                llm_hints: "Increment the counter by the specified amount".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -142,7 +141,6 @@ impl Extension for WasmDemoExtension {
                 ],
                 fixed_values: std::collections::HashMap::new(),
                 samples: vec![json!({ "amount": 1 })],
-                llm_hints: "Decrement the counter by the specified amount".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -153,7 +151,6 @@ impl Extension for WasmDemoExtension {
                 parameters: Vec::new(),
                 fixed_values: std::collections::HashMap::new(),
                 samples: vec![json!({})],
-                llm_hints: "Reset the counter to zero".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -164,7 +161,6 @@ impl Extension for WasmDemoExtension {
                 parameters: Vec::new(),
                 fixed_values: std::collections::HashMap::new(),
                 samples: vec![json!({})],
-                llm_hints: "Get the current counter value".to_string(),
                 parameter_groups: Vec::new(),
             },
         ]

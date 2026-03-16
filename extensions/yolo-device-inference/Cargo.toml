@@ -22,6 +22,7 @@ semver = "1"
 base64 = "0.22"
 image = "0.25"
 imageproc = "0.24"
+rusttype = "0.9"
 parking_lot = "0.12"
 tracing = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
@@ -29,6 +30,7 @@ uuid = { version = "1.0", features = ["v4"] }
 
 # Native-only dependencies for YOLO inference
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ort = { version = "2.0.0-rc.11", features = ["half"] }
 usls = { version = "0.2.0-alpha.3", default-features = false, features = ["vision", "ort-download-binaries"] }
 
 [features]

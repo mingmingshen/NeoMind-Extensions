@@ -230,7 +230,7 @@ pub struct YoloDeviceInference {
 
     /// YOLO model runtime (native only)
     #[cfg(not(target_arch = "wasm32"))]
-    detector: Mutex<Option<Runtime<YOLO>>>,
+    detector: Mutex<Option<Arc<std::sync::Mutex<Runtime<YOLO>>>>>,
     #[cfg(not(target_arch = "wasm32"))]
     model_load_error: Mutex<Option<String>>,
 
@@ -251,10 +251,17 @@ pub struct YoloDeviceInference {
 
 impl YoloDeviceInference {
     pub fn new() -> Self {
+        // ✅ FIX: Use lazy loading - model will be loaded on first use
+        // This prevents OOM during extension startup
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            tracing::info!("[YoloDeviceInference] YOLO model will be loaded on first inference (lazy loading)");
+        }
+
         Self {
             context: Mutex::new(None),
             #[cfg(not(target_arch = "wasm32"))]
-            detector: Mutex::new(None),
+            detector: Mutex::new(None),  // Lazy loading - no model yet
             #[cfg(not(target_arch = "wasm32"))]
             model_load_error: Mutex::new(None),
             bindings: Arc::new(RwLock::new(HashMap::new())),
@@ -310,7 +317,7 @@ impl YoloDeviceInference {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn load_model(&self, version: u8) -> std::result::Result<Runtime<YOLO>, String> {
+    fn load_model(&self, version: u8) -> std::result::Result<Arc<std::sync::Mutex<Runtime<YOLO>>>, String> {
         let model_filename = format!("yolov{}n.onnx", version);
         let model_path = self.find_model_path(&model_filename)?;
 
@@ -329,7 +336,32 @@ impl YoloDeviceInference {
         let model = YOLO::new(config)
             .map_err(|e| format!("Failed to create YOLO model: {:?}", e))?;
 
-        Ok(model)
+        Ok(Arc::new(std::sync::Mutex::new(model)))
+    }
+
+    /// Static version of load_model for use during initialization (before `self` is available)
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_model_static(version: u8) -> std::result::Result<Arc<std::sync::Mutex<Runtime<YOLO>>>, String> {
+        let model_filename = format!("yolov{}n.onnx", version);
+        let model_path = Self::find_model_path_static(&model_filename)?;
+
+        tracing::debug!("[YoloDeviceInference] Loading model: {}", model_filename);
+
+        // Use default confidence threshold
+        let conf = 0.25;
+
+        let ort_config = ORTConfig::default()
+            .with_file(model_path.to_str().unwrap());
+
+        let config = Config::yolo_detect()
+            .with_model(ort_config)
+            .with_version(YOLOVersion(version, 0, None))
+            .with_class_confs(&[conf]);
+
+        let model = YOLO::new(config)
+            .map_err(|e| format!("Failed to create YOLO model: {:?}", e))?;
+
+        Ok(Arc::new(std::sync::Mutex::new(model)))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -358,6 +390,45 @@ impl YoloDeviceInference {
         // Additional fallback paths
         let fallback_paths = vec![
             std::path::PathBuf::from("models").join(filename),
+            std::path::PathBuf::from("../models").join(filename),
+        ];
+
+        for path in fallback_paths {
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+
+        Err(format!("Model file '{}' not found in extension models directory", filename))
+    }
+
+    /// Static version of find_model_path for use during initialization
+    #[cfg(not(target_arch = "wasm32"))]
+    fn find_model_path_static(filename: &str) -> std::result::Result<std::path::PathBuf, String> {
+        // Load model from extension's models directory
+        // Expected path: <extension_dir>/models/<filename>
+        
+        // Try NEOMIND_EXTENSION_DIR first
+        eprintln!("[YoloDeviceInference] Checking NEOMIND_EXTENSION_DIR env var");
+        if let Ok(ext_dir) = std::env::var("NEOMIND_EXTENSION_DIR") {
+            eprintln!("[YoloDeviceInference] NEOMIND_EXTENSION_DIR = {}", ext_dir);
+            let path = std::path::PathBuf::from(&ext_dir).join("models").join(filename);
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+
+        // Fallback: Check current working directory
+        if let Ok(cwd) = std::env::current_dir() {
+            let path = cwd.join("models").join(filename);
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+
+        // Additional fallback paths
+        let fallback_paths = vec!
+[ std::path::PathBuf::from("models").join(filename),
             std::path::PathBuf::from("../models").join(filename),
         ];
 
@@ -456,8 +527,9 @@ impl YoloDeviceInference {
         self.init_model()?;
 
         let mut detector = self.detector.lock();
-        let model = detector.as_mut()
+        let model = detector.as_ref()
             .ok_or_else(|| ExtensionError::ExecutionFailed("Model not loaded".to_string()))?;
+        let mut model_guard = model.lock().unwrap();
 
         // Create temp file for image
         let temp_path = std::env::temp_dir().join(format!("yolo_inference_{}.jpg", uuid::Uuid::new_v4()));
@@ -478,7 +550,7 @@ impl YoloDeviceInference {
         };
 
         // Run inference
-        let ys = model.forward(&xs)
+        let ys = model_guard.run(&xs)
             .map_err(|e| ExtensionError::ExecutionFailed(format!("Inference failed: {}", e)))?;
 
         // Clean up temp file immediately
@@ -510,7 +582,7 @@ impl YoloDeviceInference {
         }
 
         let inference_time = start.elapsed().as_millis() as u64;
-        let timestamp = chrono::Utc::now().timestamp_millis();
+        let timestamp = chrono::Utc::now().timestamp();
 
         // Update stats
         self.total_inferences.fetch_add(1, Ordering::SeqCst);
@@ -794,30 +866,58 @@ impl YoloDeviceInference {
 
         // Write virtual metrics using the CapabilityContext
         // Virtual metrics must start with: transform., virtual., computed., derived., or aggregated.
-        eprintln!("[YoloDeviceInference] Writing virtual metrics for device: {}", device_id);
+
 
         // Write detection count (virtual metric)
         let metric_name = "virtual.yolo.detections";
-        // Use sync version since we're not in an async context
-        use neomind_extension_sdk::capabilities::device;
-        match device::write_virtual_metric_typed_sync(device_id, metric_name, result.detections.len() as i64, Some(result.timestamp)) {
-            Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
-            Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
+        let params = serde_json::json!({
+            "device_id": device_id,
+            "metric": metric_name,
+            "value": result.detections.len(),
+            "timestamp": result.timestamp,
+        });
+        match ctx.invoke_capability("device_metrics_write", &params) {
+            v if v.get("success").and_then(|s| s.as_bool()).unwrap_or(false) => {
+                eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name);
+            }
+            _ => {
+                eprintln!("[YoloDeviceInference] Failed to write {}", metric_name);
+            }
         }
 
         // Write inference time (virtual metric)
         let metric_name = "virtual.yolo.inference_time_ms";
-        match device::write_virtual_metric_typed_sync(device_id, metric_name, result.inference_time_ms as f64, Some(result.timestamp)) {
-            Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
-            Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
+        let params = serde_json::json!({
+            "device_id": device_id,
+            "metric": metric_name,
+            "value": result.inference_time_ms,
+            "timestamp": result.timestamp,
+        });
+        match ctx.invoke_capability("device_metrics_write", &params) {
+            v if v.get("success").and_then(|s| s.as_bool()).unwrap_or(false) => {
+                eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name);
+            }
+            _ => {
+                eprintln!("[YoloDeviceInference] Failed to write {}", metric_name);
+            }
         }
 
         // Write detection labels as JSON (virtual metric)
         let labels: Vec<&str> = result.detections.iter().map(|d| d.label.as_str()).collect();
         let metric_name = "virtual.yolo.labels";
-        match device::write_virtual_metric_sync(device_id, metric_name, &serde_json::to_value(&labels).unwrap_or_default(), Some(result.timestamp)) {
-            Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
-            Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
+        let params = serde_json::json!({
+            "device_id": device_id,
+            "metric": metric_name,
+            "value": labels,
+            "timestamp": result.timestamp,
+        });
+        match ctx.invoke_capability("device_metrics_write", &params) {
+            v if v.get("success").and_then(|s| s.as_bool()).unwrap_or(false) => {
+                eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name);
+            }
+            _ => {
+                eprintln!("[YoloDeviceInference] Failed to write {}", metric_name);
+            }
         }
 
         // Write annotated image (virtual metric) with proper data URI format
@@ -825,13 +925,22 @@ impl YoloDeviceInference {
             let metric_name = "virtual.yolo.annotated_image";
             // Add data URI prefix for proper image display
             let data_uri = format!("data:image/jpeg;base64,{}", img);
-            match device::write_virtual_metric_sync(device_id, metric_name, &serde_json::json!(data_uri), Some(result.timestamp)) {
-                Ok(_) => eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name),
-                Err(e) => eprintln!("[YoloDeviceInference] Failed to write {}: {}", metric_name, e),
+            let params = serde_json::json!({
+                "device_id": device_id,
+                "metric": metric_name,
+                "value": data_uri,
+                "timestamp": result.timestamp,
+            });
+            match ctx.invoke_capability("device_metrics_write", &params) {
+                v if v.get("success").and_then(|s| s.as_bool()).unwrap_or(false) => {
+                    eprintln!("[YoloDeviceInference] Successfully wrote {}", metric_name);
+                }
+                _ => {
+                    eprintln!("[YoloDeviceInference] Failed to write {}", metric_name);
+                }
             }
         }
 
-        eprintln!("[YoloDeviceInference] Virtual metrics written for device: {} (detections: {})", device_id, result.detections.len());
     }
 
     /// Extract image data from a value, supporting nested paths
@@ -1028,7 +1137,6 @@ impl Extension for YoloDeviceInference {
                 ],
                 fixed_values: HashMap::new(),
                 samples: vec![json!({"device_id": "camera-01", "image_metric": "image", "confidence_threshold": 0.3})],
-                llm_hints: "Bind a device for automatic YOLO inference on image updates".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -1051,7 +1159,6 @@ impl Extension for YoloDeviceInference {
                 ],
                 fixed_values: HashMap::new(),
                 samples: vec![json!({"device_id": "camera-01"})],
-                llm_hints: "Unbind a device from automatic inference".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -1062,7 +1169,6 @@ impl Extension for YoloDeviceInference {
                 parameters: vec![],
                 fixed_values: HashMap::new(),
                 samples: vec![],
-                llm_hints: "Get all device bindings and their status".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -1085,7 +1191,6 @@ impl Extension for YoloDeviceInference {
                 ],
                 fixed_values: HashMap::new(),
                 samples: vec![json!({"image": "base64_encoded_image_data"})],
-                llm_hints: "Analyze an image and return detected objects".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -1096,7 +1201,6 @@ impl Extension for YoloDeviceInference {
                 parameters: vec![],
                 fixed_values: HashMap::new(),
                 samples: vec![],
-                llm_hints: "Get extension status including model info and statistics".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -1130,7 +1234,6 @@ impl Extension for YoloDeviceInference {
                 ],
                 fixed_values: HashMap::new(),
                 samples: vec![json!({"device_id": "camera-01", "active": false})],
-                llm_hints: "Toggle a device binding active state".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -1141,7 +1244,6 @@ impl Extension for YoloDeviceInference {
                 parameters: vec![],
                 fixed_values: HashMap::new(),
                 samples: vec![],
-                llm_hints: "Get current YOLO extension configuration".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -1152,14 +1254,13 @@ impl Extension for YoloDeviceInference {
                 parameters: vec![],
                 fixed_values: HashMap::new(),
                 samples: vec![],
-                llm_hints: "Configure the extension with persisted settings".to_string(),
                 parameter_groups: Vec::new(),
             },
         ]
     }
 
     fn produce_metrics(&self) -> Result<Vec<ExtensionMetricValue>> {
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = chrono::Utc::now().timestamp();
 
         Ok(vec![
             ExtensionMetricValue {
@@ -1512,8 +1613,7 @@ impl Extension for YoloDeviceInference {
             "toggle_binding" => {
                 let device_id = args.get("device_id").and_then(|v| v.as_str())
                     .ok_or_else(|| ExtensionError::InvalidArguments("Missing device_id".to_string()))?;
-                let active = args.get("active").and_then(|v| v.as_bool())
-                    .ok_or_else(|| ExtensionError::InvalidArguments("Missing active".to_string()))?;
+                let active = args.get("active").and_then(|v| v.as_bool());
                 if let Some(binding) = self.bindings.write().get_mut(device_id) {
                     binding.active = active;
                     if let Some(stats) = self.binding_stats.write().get_mut(device_id) {
@@ -1541,6 +1641,15 @@ impl Extension for YoloDeviceInference {
     /// This is called by the system when the extension is loaded.
     /// It loads persisted bindings and configuration.
     async fn configure(&mut self, config: &serde_json::Value) -> Result<()> {
+
+        // ✅ FIX: Use lazy loading instead of eager loading
+        // Model will be loaded on first use (process_image)
+        // This prevents memory spike during extension startup
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            tracing::info!("[YoloDeviceInference] Model will be loaded on first use (lazy loading)");
+        }
+
         eprintln!("[YoloDeviceInference] configure called with config: {:?}", config);
         // First, try to load from file (for isolated extensions)
         if let Some(file_config) = self.load_config_from_file() {

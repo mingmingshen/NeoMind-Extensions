@@ -1,7 +1,7 @@
 {
   "id": "image-analyzer-v2",
   "version": "2.0.0",
-  "entrypoint": "image-analyzer-v2-components.umd.js",
+  "entrypoint": "image-analyzer-v2-components.umd.cjs",
   "components": [
     {
       "name": "ImageAnalyzer",

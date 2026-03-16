@@ -1,7 +1,7 @@
 {
   "id": "yolo-device-inference",
   "version": "1.0.0",
-  "entrypoint": "yolo-device-inference-components.umd.js",
+  "entrypoint": "yolo-device-inference-components.umd.cjs",
   "components": [
     {
       "name": "DeviceInferenceCard",

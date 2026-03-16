@@ -384,7 +384,6 @@ impl Extension for WeatherExtension {
                     json!({ "city": "Beijing" }),
                     json!({ "city": "Shanghai" }),
                 ],
-                llm_hints: "Get current weather for a city. Use when user asks about weather, temperature, humidity, or wind.".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -395,7 +394,6 @@ impl Extension for WeatherExtension {
                 parameters: Vec::new(),
                 fixed_values: Default::default(),
                 samples: vec![json!({})],
-                llm_hints: "Refresh weather data for the default city.".to_string(),
                 parameter_groups: Vec::new(),
             },
             ExtensionCommand {
@@ -418,7 +416,6 @@ impl Extension for WeatherExtension {
                 ],
                 fixed_values: Default::default(),
                 samples: vec![json!({ "city": "Shanghai" })],
-                llm_hints: "Set the default city for weather queries.".to_string(),
                 parameter_groups: Vec::new(),
             },
         ]

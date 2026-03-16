@@ -14,7 +14,9 @@ Cargo.lock
 *~
 .DS_Store
 *.iml
-
+*.bak*
+*.final*
+*.before_init_fix
 # Build outputs
 *.dylib
 *.so
