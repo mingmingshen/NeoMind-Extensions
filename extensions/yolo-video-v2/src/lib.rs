@@ -716,19 +716,6 @@ impl Default for YoloVideoProcessorV2 {
 /// When the extension is dropped, we need to ensure the YoloDetector is
 /// properly cleaned up in a blocking thread to avoid the panic:
 /// "Cannot start a runtime from within a runtime"
-impl Drop for YoloVideoProcessorV2 {
-    fn drop(&mut self) {
-        tracing::info!("Dropping YoloVideoProcessorV2, cleaning up detector");
-
-        // Get access to the detector and call shutdown
-        if let Some(mut detector) = self.processor.detector.lock().take() {
-            tracing::debug!("Calling detector shutdown");
-            detector.shutdown();
-        }
-
-        tracing::info!("YoloVideoProcessorV2 dropped successfully");
-    }
-}
 
 // ============================================================================
 // Extension Trait Implementation
@@ -1344,11 +1331,36 @@ impl Extension for YoloVideoProcessorV2 {
                 let elapsed = start.duration_since(last_time);
                 if elapsed.as_millis() < 100 {  // Minimum 100ms between frames (max 10 FPS)
                     s.dropped_frames += 1;
+                    
+                    // IMPORTANT: When dropping a frame, return the last valid frame
+                    // instead of a skip response. This prevents the frontend from showing
+                    // corrupted/blank frames.
                     eprintln!("[YOLO] Frame {} dropped (too fast: {}ms), total dropped: {}",
                         chunk.sequence, elapsed.as_millis(), s.dropped_frames);
 
-                    // Return a skip response to indicate frame was dropped
-                    // Frontend will keep displaying the last received frame
+                    // Return the last cached frame if available
+                    if let Some(ref last_data) = s.last_frame {
+                        // Clone the data while we still have the lock
+                        let cached_frame = last_data.clone();
+                        let cached_detections = s.last_detections.clone();
+                        drop(s); // Release lock before returning
+                        
+                        return Ok(StreamResult::success(
+                            Some(chunk.sequence),
+                            chunk.sequence,
+                            cached_frame,
+                            StreamDataType::Image { format: "jpeg".to_string() },
+                            0.0,
+                        ).with_metadata(serde_json::json!({
+                            "skipped": true,
+                            "reason": "rate_limit",
+                            "detections": cached_detections
+                        })));
+                    }
+                    
+                    drop(s); // Release lock before returning
+                    
+                    // No cached frame available, return skip response
                     return Ok(StreamResult::json(
                         Some(chunk.sequence),
                         chunk.sequence,
@@ -1358,6 +1370,39 @@ impl Extension for YoloVideoProcessorV2 {
                 }
             }
             s.last_process_time = Some(start);
+        }
+
+        // ✨ CRITICAL: Validate input data before decoding
+        // Empty or too-small buffers can cause decoder panics
+        if chunk.data.len() < 100 {
+            eprintln!("[YOLO] Invalid frame data: too small ({} bytes)", chunk.data.len());
+            let error_result = json!({
+                "error": format!("Invalid frame data: too small ({} bytes)", chunk.data.len()),
+                "detections": []
+            });
+            return Ok(StreamResult::json(
+                Some(chunk.sequence),
+                chunk.sequence,
+                error_result,
+                start.elapsed().as_secs_f32() * 1000.0,
+            ).unwrap());
+        }
+
+        // Check for JPEG header (FF D8)
+        if chunk.data.len() < 2 || chunk.data[0] != 0xFF || chunk.data[1] != 0xD8 {
+            eprintln!("[YOLO] Invalid JPEG header: {:02X} {:02X}", 
+                chunk.data.get(0).unwrap_or(&0), 
+                chunk.data.get(1).unwrap_or(&0));
+            let error_result = json!({
+                "error": "Invalid JPEG format",
+                "detections": []
+            });
+            return Ok(StreamResult::json(
+                Some(chunk.sequence),
+                chunk.sequence,
+                error_result,
+                start.elapsed().as_secs_f32() * 1000.0,
+            ).unwrap());
         }
 
         // Decode JPEG frame
@@ -1539,11 +1584,28 @@ impl Extension for YoloVideoProcessorV2 {
         Ok(result)
     }
 
+
     async fn close_session(
         &self,
         session_id: &str,
     ) -> Result<SessionStats> {
         eprintln!("[YOLO] close_session called for session: {}", session_id);
+        
+        let session_id_owned = session_id.to_string();
+        
+        // ✨ CRITICAL: Call detector.shutdown() to properly leak the model
+        // The updated shutdown() method now leaks the model using Box::into_raw
+        // instead of dropping it, which prevents the Tokio runtime panic.
+        //
+        // This approach is safe because:
+        // 1. The model is leaked (not dropped), avoiding Tokio runtime conflict
+        // 2. The OS will reclaim all memory when the extension process exits
+        // 3. The Extension Runner will terminate the process after close_session
+        eprintln!("[YOLO] Shutting down detector (leaking model to avoid panic)");
+        if let Some(mut detector) = self.processor.detector.lock().take() {
+            detector.shutdown();
+        }
+        eprintln!("[YOLO] Detector shutdown complete");
 
         // Stop push if running
         self.stop_push(session_id).await?;
@@ -1554,7 +1616,7 @@ impl Extension for YoloVideoProcessorV2 {
         // Get stats and remove stream
         let stats = {
             let mut registry = get_registry().lock();
-            if let Some(stream) = registry.streams.remove(session_id) {
+            if let Some(stream) = registry.streams.remove(&session_id_owned) {
                 let s = stream.lock();
                 eprintln!("[YOLO] Session removed from registry, processed {} frames", s.frame_count);
                 SessionStats {
@@ -1575,7 +1637,6 @@ impl Extension for YoloVideoProcessorV2 {
         eprintln!("[YOLO] Session closed: {}", session_id);
         Ok(stats)
     }
-
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

@@ -236,29 +236,46 @@ impl YoloDetector {
     /// or use block_on during drop, which causes panic if called from within an async context.
     ///
     /// This method uses spawn_blocking to drop the model in a safe thread context.
+
+    /// ✨ CRITICAL: Clean shutdown that MUST be called before extension is dropped
+    ///
+    /// IMPORTANT: This method does NOT actually drop the usls::Runtime because that
+    /// would cause "Cannot drop a runtime in a context where blocking is not allowed"
+    /// panic when usls tries to shutdown its Tokio runtime.
+    ///
+    /// Instead, we leak the model on purpose. The Extension Runner will terminate
+    /// the extension process after close_session completes, which will properly
+    /// clean up all resources (memory, GPU, etc.) at the OS level.
+    ///
+    /// This approach is safe because:
+    /// 1. The extension process is isolated and will be terminated anyway
+    /// 2. The OS guarantees proper resource cleanup on process exit
+    /// 3. We avoid the Tokio runtime conflict completely
     pub fn shutdown(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.model.is_some() {
-                tracing::debug!("Shutting down YoloDetector in blocking thread");
+                tracing::info!("Shutting down YoloDetector (leaking model, OS will clean up on process exit)");
 
                 // Take the model out of the Option
-                let model = self.model.take();
+                let model_opt = self.model.take();
 
-                // Drop it in a blocking thread to avoid runtime panic
-                // We use a simple thread instead of tokio::spawn_blocking because
-                // we're already potentially in a shutdown context
-                std::thread::spawn(move || {
-                    // The model will be dropped when this thread exits
-                    // This happens outside the async runtime, avoiding the panic
-                    drop(model);
-                }).join().ok(); // Don't wait, just detach
+                // Only proceed if we actually have a model
+                if let Some(model) = model_opt {
+                    // ✨ CRITICAL: Convert Arc into a raw pointer and leak it
+                    // This ensures the Arc AND its data are never dropped
+                    // The memory will be reclaimed by the OS when the process exits
+                    let leaked: *const Arc<std::sync::Mutex<Runtime<YOLO>>> =
+                        Box::into_raw(Box::new(model));
 
-                tracing::debug!("YoloDetector shutdown complete");
+                    // Intentionally leak the pointer - never dereference it
+                    std::mem::forget(leaked);
+                }
+
+                tracing::info!("YoloDetector shutdown complete (model leaked, will be cleaned up by OS on process exit)");
             }
         }
     }
-
     /// Run YOLO inference using usls with proper API
     #[cfg(not(target_arch = "wasm32"))]
     fn run_inference(
