@@ -132,6 +132,52 @@ cp target/release/libneomind_extension_yolo_video_v2.dylib ~/.neomind/extensions
 
 ---
 
+## CLI 工具
+
+NeoMind 提供了一套命令行工具用于服务管理和扩展操作：
+
+### 健康检查
+
+```bash
+neomind health
+```
+
+检查服务器状态、数据库连接、LLM 后端和扩展目录。
+
+### 日志查看
+
+```bash
+# 查看所有日志
+neomind logs
+
+# 查看特定扩展的日志
+neomind logs --extension my-extension
+
+# 过滤错误日志
+neomind logs --level error
+
+# 实时跟踪日志
+neomind logs --follow
+```
+
+### 扩展管理
+
+```bash
+# 列出已安装扩展
+neomind extension list
+
+# 安装 .nep 包
+neomind extension install my-extension-1.0.0.nep
+
+# 卸载扩展
+neomind extension uninstall my-extension
+
+# 验证包格式
+neomind extension validate my-extension-1.0.0.nep
+```
+
+---
+
 ## 快速开始
 
 ### 前置条件
@@ -194,6 +240,44 @@ pub extern "C" fn neomind_extension_destroy(ptr: *mut RwLock<Box<dyn Any>>) {
     // 清理扩展
 }
 ```
+
+---
+
+
+## 大型扩展的内存考虑
+
+**重要提示**：大型扩展（如 YOLO 扩展）在服务启动时**不会自动加载**，以防止系统内存溢出（OOM）。
+
+### 受影响的扩展
+
+- `yolo-device-inference` - 38MB+ 二进制文件 + 200MB+ 模型文件
+- `yolo-video-v2` - 视频处理扩展
+
+### 手动加载方法
+
+对于这些大型扩展，请在服务启动后通过以下方式手动加载：
+
+```bash
+# 方法 1: 使用 CLI
+neomind extension install yolo-device-inference-1.0.0.nep
+
+# 方法 2: 使用 Web UI
+# 访问 http://localhost:9375 → 扩展 → 添加扩展 → 选择 .nep 文件
+
+# 方法 3: 使用 API
+curl -X POST http://localhost:9375/api/extensions/upload/file \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @yolo-device-inference-1.0.0.nep
+```
+
+### 为什么需要手动加载？
+
+YOLO 扩展包含：
+- 大型二进制文件（38MB+）
+- 深度学习模型（200MB+）
+- 如果在服务启动时自动加载，会导致系统内存耗尽
+
+**解决方案**：延迟加载 - 仅在用户明确请求时才加载扩展。
 
 ---
 

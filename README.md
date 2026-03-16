@@ -98,6 +98,53 @@ cp target/release/libneomind_extension_yolo_video_v2.dylib ~/.neomind/extensions
 
 ---
 
+
+## CLI Tools
+
+NeoMind provides a command-line interface for service management and extension operations:
+
+### Health Check
+
+```bash
+neomind health
+```
+
+Check server status, database connection, LLM backend, and extensions directory.
+
+### Log Viewing
+
+```bash
+# View all logs
+neomind logs
+
+# View logs for a specific extension
+neomind logs --extension my-extension
+
+# Filter by log level
+neomind logs --level error
+
+# Follow logs in real-time
+neomind logs --follow
+```
+
+### Extension Management
+
+```bash
+# List installed extensions
+neomind extension list
+
+# Install a .nep package
+neomind extension install my-extension-1.0.0.nep
+
+# Uninstall an extension
+neomind extension uninstall my-extension
+
+# Validate package format
+neomind extension validate my-extension-1.0.0.nep
+```
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -116,6 +163,32 @@ ls target/release/libneomind_extension_*.dylib
 ```
 
 ### Installing Extensions
+
+#### Method 1: Using NeoMind CLI (Recommended)
+
+The NeoMind CLI provides convenient commands for extension management:
+
+```bash
+# Check system health
+neomind health
+
+# View extension logs
+neomind logs --extension my-extension
+
+# List installed extensions
+neomind extension list
+
+# Install a .nep package
+neomind extension install my-extension-1.0.0.nep
+
+# Uninstall an extension
+neomind extension uninstall my-extension
+
+# Validate a package
+neomind extension validate my-extension-1.0.0.nep
+```
+
+#### Method 2: Manual Installation
 
 ```bash
 # Create extensions directory
@@ -312,6 +385,44 @@ pub extern "C" fn neomind_extension_destroy(ptr: *mut RwLock<Box<dyn Any>>) {
     // Cleanup extension
 }
 ```
+
+---
+
+
+## Memory Considerations for Large Extensions
+
+**Important**: Large extensions (e.g., YOLO extensions) are **not auto-loaded during server startup** to prevent Out of Memory (OOM) errors.
+
+### Affected Extensions
+
+- `yolo-device-inference` - 38MB+ binary + 200MB+ model files
+- `yolo-video-v2` - Video processing extension
+
+### Manual Loading Methods
+
+For these large extensions, load them manually after server startup:
+
+```bash
+# Method 1: Using CLI
+neomind extension install yolo-device-inference-1.0.0.nep
+
+# Method 2: Using Web UI
+# Visit http://localhost:9375 → Extensions → Add Extension → Select .nep file
+
+# Method 3: Using API
+curl -X POST http://localhost:9375/api/extensions/upload/file \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @yolo-device-inference-1.0.0.nep
+```
+
+### Why Manual Loading?
+
+YOLO extensions contain:
+- Large binary files (38MB+)
+- Deep learning models (200MB+)
+- Auto-loading during server startup would cause system memory exhaustion
+
+**Solution**: Lazy loading - extensions are loaded only when explicitly requested by the user.
 
 ---
 

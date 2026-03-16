@@ -272,6 +272,70 @@ cp target/release/libneomind_extension_my_extension.dylib ~/.neomind/extensions/
 
 ---
 
+## Capability System
+
+NeoMind provides a **decoupled, versioned capability system** that allows extensions to access platform features safely.
+
+### Virtual Metrics
+
+Extensions can report custom metrics without requiring real hardware:
+
+```rust
+use neomind_extension_sdk::capabilities::device;
+
+// Async context
+async fn report_metrics(&self) -> Result<()> {
+    device::write_virtual_metric(
+        "virtual-sensor-1",
+        "temperature",
+        25.5,
+        None
+    ).await?;
+    Ok(())
+}
+
+// Sync context (non-async function)
+fn report_metrics_sync(&self) -> Result<()> {
+    device::write_virtual_metric_sync(
+        "virtual-sensor-1",
+        "temperature",
+        25.5,
+        Some(chrono::Utc::now().timestamp_millis())
+    )?;
+    Ok(())
+}
+```
+
+**When to use sync vs async:**
+- Use `write_virtual_metric_sync()` in `produce_metrics()` and other non-async contexts
+- Use `write_virtual_metric()` in async functions like `execute_command()`
+
+### Typed Virtual Metrics
+
+For type-safe metric reporting:
+
+```rust
+use neomind_extension_sdk::capabilities::device;
+
+// Report integer value
+device::write_virtual_metric_typed_sync::<i64>(
+    device_id,
+    metric_name,
+    value,
+    Some(timestamp)
+)?;
+
+// Report float value
+device::write_virtual_metric_typed_sync::<f64>(
+    device_id,
+    metric_name,
+    value,
+    Some(timestamp)
+)?;
+```
+
+---
+
 ## SDK Reference
 
 ### FFI Interface

@@ -277,6 +277,70 @@ cp target/release/libneomind_extension_my_extension.dylib ~/.neomind/extensions/
 
 ---
 
+## 能力系统
+
+NeoMind 提供了一个**解耦的、版本化的能力系统**，允许扩展安全地访问平台功能。
+
+### 虚拟指标
+
+扩展可以报告自定义指标，而无需真实硬件：
+
+```rust
+use neomind_extension_sdk::capabilities::device;
+
+// 异步上下文
+async fn report_metrics(&self) -> Result<()> {
+    device::write_virtual_metric(
+        "virtual-sensor-1",
+        "temperature",
+        25.5,
+        None
+    ).await?;
+    Ok(())
+}
+
+// 同步上下文（非异步函数）
+fn report_metrics_sync(&self) -> Result<()> {
+    device::write_virtual_metric_sync(
+        "virtual-sensor-1",
+        "temperature",
+        25.5,
+        Some(chrono::Utc::now().timestamp_millis())
+    )?;
+    Ok(())
+}
+```
+
+**何时使用同步与异步：**
+- 在 `produce_metrics()` 和其他非异步上下文中使用 `write_virtual_metric_sync()`
+- 在异步函数如 `execute_command()` 中使用 `write_virtual_metric()`
+
+### 类型化虚拟指标
+
+用于类型安全的指标报告：
+
+```rust
+use neomind_extension_sdk::capabilities::device;
+
+// 报告整数值
+device::write_virtual_metric_typed_sync::<i64>(
+    device_id,
+    metric_name,
+    value,
+    Some(timestamp)
+)?;
+
+// 报告浮点数值
+device::write_virtual_metric_typed_sync::<f64>(
+    device_id,
+    metric_name,
+    value,
+    Some(timestamp)
+)?;
+```
+
+---
+
 ## SDK 参考
 
 ### FFI 接口

@@ -77,15 +77,85 @@ make clean                # 清理构建产物
 python3 scripts/test_nep.py dist/weather-forecast-v2-2.0.0.nep
 ```
 
+
+## macOS dylib 依赖修复
+
+在 macOS 上，如果扩展的 dylib 文件有自引用依赖（通过 `otool -L` 可以看到），需要使用 `@executable_path` 或 `@rpath` 来修复：
+
+### 问题诊断
+
+```bash
+# 检查 dylib 依赖
+otool -L target/release/libneomind_extension_my_extension.dylib
+```
+
+如果输出中包含绝对路径或相对路径的自引用（如 `libneomind_extension_my_extension.dylib`），则需要修复。
+
+### 修复方法
+
+```bash
+# 使用 install_name_tool 修复自引用
+install_name_tool -id /usr/local/lib/neomind/extensions/libneomind_extension_my_extension.dylib \
+  target/release/libneomind_extension_my_extension.dylib
+```
+
+或者在构建脚本中自动处理：
+
+```bash
+# scripts/fix_dylib.sh
+#!/bin/bash
+
+DYLIB_PATH="$1"
+DYLIB_NAME=$(basename "$DYLIB_PATH")
+
+# 修复自引用为绝对路径
+install_name_tool -id /usr/local/lib/neomind/extensions/$DYLIB_NAME "$DYLIB_PATH"
+
+echo "Fixed dylib: $DYLIB_PATH"
+```
+
+### 验证修复
+
+```bash
+# 再次检查依赖
+otool -L target/release/libneomind_extension_my_extension.dylib
+```
+
+现在自引用应该显示为 `/usr/local/lib/neomind/extensions/libneomind_extension_my_extension.dylib`。
+
+---
+
 ## 安装方式
 
-### 1. 本地开发安装
+### 1. 使用 NeoMind CLI（推荐）
+
+```bash
+# 检查系统健康
+neomind health
+
+# 查看扩展日志
+neomind logs --extension weather-forecast-v2
+
+# 列出已安装扩展
+neomind extension list
+
+# 安装 .nep 包
+neomind extension install weather-forecast-v2-2.0.0.nep
+
+# 卸载扩展
+neomind extension uninstall weather-forecast-v2
+
+# 验证包
+neomind extension validate weather-forecast-v2-2.0.0.nep
+```
+
+### 2. 本地开发安装
 ```bash
 ./build.sh --yes
 # 扩展安装到 ~/.neomind/extensions/
 ```
 
-### 2. Web UI 上传
+### 3. Web UI 上传
 1. 下载 `.nep` 文件
 2. NeoMind Web UI → 扩展 → 添加扩展 → 文件模式
 3. 拖放文件并上传
@@ -125,3 +195,38 @@ NeoMind-Extension/
 ```
 
 确保 NeoMind 主项目位于 `../NeoMind/` 目录。
+
+## ⚠️ 内存限制警告
+
+**大型扩展（如 YOLO 扩展）在服务启动时不会自动加载**，以防止系统 OOM（Out of Memory）。
+
+### 受影响的扩展
+
+- `yolo-device-inference` - 38MB+ 二进制 + 200MB+ 模型文件
+- `yolo-video-v2` - 视频处理扩展
+
+### 手动加载方法
+
+对于这些大型扩展，请在服务启动后通过以下方式手动加载：
+
+```bash
+# 方法 1: 使用 CLI
+neomind extension install yolo-device-inference-1.0.0.nep
+
+# 方法 2: 使用 Web UI
+# 访问 http://localhost:9375 → 扩展 → 添加扩展 → 选择 .nep 文件
+
+# 方法 3: 使用 API
+curl -X POST http://localhost:9375/api/extensions/upload/file \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @yolo-device-inference-1.0.0.nep
+```
+
+### 为什么需要手动加载？
+
+YOLO 扩展包含：
+- 大型二进制文件（38MB+）
+- 深度学习模型（200MB+）
+- 如果在服务启动时自动加载，会导致系统内存不足
+
+解决方案是延迟加载：仅在需要时通过用户显式操作加载。
