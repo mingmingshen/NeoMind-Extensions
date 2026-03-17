@@ -446,8 +446,10 @@ For detailed information, see:
 | macOS    | x86_64       | `*.dylib`        |
 | Linux    | x86_64       | `*.so`           |
 | Linux    | ARM64        | `*.so`           |
-| Windows  | x86_64       | `*.dll`          |
+| Windows  | x86_64, x86 (32-bit) | `*.dll`          |
 | Cross-platform | Any    | `*.wasm`         |
+
+**Latest Release (v2.0.0)**: 6 platforms, 27 extension packages
 
 ---
 
