@@ -416,6 +416,15 @@ jobs:
           - ABI Version 3 support
           EOF
 
+          # Release gate: refuse to publish when the version chain is
+          # inconsistent (VERSION ≠ Cargo.toml ≠ metadata ≠ index ≠ URL tag).
+          # The repo shipped releases with 2.7.7/2.7.8 straddling all five
+          # because this check existed but only ran manually.
+          if ! ./release.sh --check; then
+            echo "::error::release.sh --check failed — run ./release.sh $VERSION to re-sync before publishing"
+            exit 1
+          fi
+
           if gh release view "v$VERSION" &>/dev/null; then
             echo "Release v$VERSION exists, updating packages..."
             gh release edit "v$VERSION" --notes-file /tmp/release_notes.md
@@ -431,4 +440,15 @@ jobs:
             echo "Uploading: $(basename "$nep")"
             gh release upload "v$VERSION" "$nep" --clobber
           done
+
+          # Upload checksums so the platform can verify package integrity
+          # (build.sh computes per-file sha256 into dist/checksums.txt).
+          # The platform's marketplace client fetches this file from the same
+          # release as the .nep and refuses/flags mismatches.
+          if [ -f dist/checksums.txt ]; then
+            gh release upload "v$VERSION" dist/checksums.txt --clobber
+            echo "✓ checksums.txt uploaded"
+          else
+            echo "::warning::dist/checksums.txt missing — platform installs from this release will be unverified"
+          fi
           echo "✓ Packages uploaded to release v$VERSION"

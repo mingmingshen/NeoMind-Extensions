@@ -222,7 +222,7 @@ impl Extension for WeatherExtension {
             ExtensionMetadata::new(
                 "weather-forecast-v2",
                 "Weather Forecast V2",
-                "2.0.0"
+                env!("CARGO_PKG_VERSION")
             )
             .with_description("Weather forecast extension for the NeoMind isolated runtime using a sync HTTP client")
             .with_author("NeoMind Team")

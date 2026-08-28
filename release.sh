@@ -166,7 +166,22 @@ do_sync() {
         [ -f "$d/Cargo.toml" ] || continue
         local id; id=$(basename "$d")
         local desc; desc=$(grep -E "^description" "$d/Cargo.toml" | head -1 | sed 's/.*=.*"\(.*\)"/\1/')
-        local etype; etype=$(jq -r '.type // "native"' "$d/metadata.json" 2>/dev/null || echo "native")
+        # WASM extensions from the same explicit list build.sh builds for;
+        # metadata.json can't be the source of truth for this — do_sync itself
+        # writes it, and a previous hard-coded type:"native" already
+        # overwrote wasm-demo's real type.
+        local etype="native"
+        case "$id" in wasm-demo) etype="wasm" ;; esac
+
+        # Keep an existing (possibly hand-edited) display name; generate one
+        # only for brand-new extensions. The old unconditional sed generated
+        # names overwrote manual edits on every sync ("uacnet uridge" was a
+        # hand-typo that then became permanent).
+        local display_name
+        display_name=$(jq -r '.name // ""' "$d/metadata.json" 2>/dev/null || echo "")
+        if [ -z "$display_name" ]; then
+            display_name=$(echo "$id" | sed 's/-v2$//' | sed 's/-/ /g')
+        fi
         local cats; cats=$(infer_categories "$id")
 
         # Build download URLs — tag and filename both use $VERSION
@@ -187,14 +202,15 @@ do_sync() {
         local metadata
         metadata=$(jq -c -n \
             --arg id "$id" \
-            --arg name "$(echo "$id" | sed 's/-v2$//' | sed 's/-/ /g')" \
+            --arg name "$display_name" \
             --arg version "$VERSION" \
             --arg desc "$desc" \
+            --arg etype "$etype" \
             --argjson cats "$cats" \
             --arg home "https://github.com/$GITHUB_REPO/tree/main/extensions/$id" \
             --argjson builds "$builds" \
             '{id:$id, name:$name, version:$version, description:$desc,
-              author:"NeoMind Team", license:"Apache-2.0", type:"native",
+              author:"NeoMind Team", license:"Apache-2.0", type:$etype,
               categories:$cats, homepage:$home, builds:$builds}')
 
         if [ -f "$fj" ]; then

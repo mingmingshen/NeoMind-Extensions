@@ -1212,7 +1212,7 @@ impl Extension for YoloVideoProcessorV2 {
             ExtensionMetadata::new(
                 "yolo-video-v2",
                 "YOLO Video V2",
-                "2.0.0",
+                env!("CARGO_PKG_VERSION"),
             )
             .with_description("Real-time video stream object detection with YOLOv11, RTSP/camera support, ROI analytics, line crossing, smart capture rules, and MJPEG streaming")
             .with_author("NeoMind Team")
