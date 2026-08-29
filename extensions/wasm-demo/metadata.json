@@ -1,18 +1,30 @@
 {
   "id": "wasm-demo",
   "name": "wasm demo",
-  "version": "2.7.7",
+  "version": "2.7.9",
   "description": "WASM sandbox demo extension showcasing NeoMind extension SDK capabilities with counter, greeting, and echo commands",
   "author": "NeoMind Team",
   "license": "Apache-2.0",
   "type": "wasm",
   "categories": [
-    "demo"
+    "utility"
   ],
   "homepage": "https://github.com/camthink-ai/NeoMind-Extensions/tree/main/extensions/wasm-demo",
   "builds": {
-    "wasm": {
-      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.7.8/wasm-demo-2.7.7.nep"
+    "darwin-aarch64": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.7.9/wasm-demo-2.7.9.nep"
+    },
+    "darwin-x86_64": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.7.9/wasm-demo-2.7.9.nep"
+    },
+    "linux-x86_64": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.7.9/wasm-demo-2.7.9.nep"
+    },
+    "linux-aarch64": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.7.9/wasm-demo-2.7.9.nep"
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/camthink-ai/NeoMind-Extensions/releases/download/v2.7.9/wasm-demo-2.7.9.nep"
     }
   }
 }
