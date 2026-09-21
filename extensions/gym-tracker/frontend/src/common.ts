@@ -161,7 +161,7 @@ export async function runExtensionCommand<T>(
       }
     )
     if (res.status === 401) {
-      return { success: false, error: '登录已过期，请重新登录（401）' }
+      return { success: false, error: 'Session expired — please sign in again (401)' }
     }
     if (!res.ok) return { success: false, error: `HTTP ${res.status}` }
     return res.json()
