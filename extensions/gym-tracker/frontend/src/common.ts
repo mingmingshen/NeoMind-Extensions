@@ -124,6 +124,21 @@ export interface Zone {
 
 export const DEFAULT_EXTENSION_ID = 'gym-tracker'
 
+/** crypto.randomUUID is only available in SECURE contexts (HTTPS or
+ *  localhost). Gym dashboards are routinely served over plain HTTP on a
+ *  camera/edge LAN IP, where randomUUID is undefined and every zone/line
+ *  close crashed the component (Component Error card). Fallback covers
+ *  insecure origins; real randomUUID when present. */
+export function uuidFallback(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    return crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
 /** Stream-player extension id — the video source for the overlay component. */
 export const VIDEO_EXTENSION_ID = 'stream-player'
 
