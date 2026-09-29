@@ -57,6 +57,7 @@ import {
   runExtensionCommand,
   setMemberPhoto,
   fetchExtensionUiConfig,
+  uuidFallback,
 } from './common'
 import STYLES from './styles.css?raw'
 import { GymSelect } from './GymSelect'
@@ -2249,7 +2250,7 @@ export const GymVideoOverlay = forwardRef<HTMLDivElement, ExtensionComponentProp
         setDraftLine((d) => {
           if (d.length === 0) return [p]
           const line: DraftLine = {
-            id: crypto.randomUUID(),
+            id: uuidFallback(),
             name: `Line ${linesRef.current.length + 1}`,
             a: d[0],
             b: p,
@@ -2263,7 +2264,7 @@ export const GymVideoOverlay = forwardRef<HTMLDivElement, ExtensionComponentProp
         setZones((zs) => [
           ...zs,
           {
-            id: crypto.randomUUID(),
+            id: uuidFallback(),
             name: `Zone ${zs.length + 1}`,
             equipment_type: 'equipment',
             polygon: [p],
@@ -2284,7 +2285,7 @@ export const GymVideoOverlay = forwardRef<HTMLDivElement, ExtensionComponentProp
       setZones((zs) => [
         ...zs,
         {
-          id: crypto.randomUUID(),
+          id: uuidFallback(),
           name: excl ? `Exclusion ${zs.filter((z) => z.equipment_type === 'exclusion').length + 1}` : `Zone ${zs.length + 1}`,
           equipment_type: excl ? 'exclusion' : 'equipment',
           polygon: draft,
@@ -2380,7 +2381,7 @@ export const GymVideoOverlay = forwardRef<HTMLDivElement, ExtensionComponentProp
           const poly = [...draftRef.current]
           const excl = editKindRef.current === 'exclude'
           const fresh = {
-            id: crypto.randomUUID(),
+            id: uuidFallback(),
             name: excl
               ? `Exclusion ${zonesNow.filter((z: DraftZone) => z.equipment_type === 'exclusion').length + 1}`
               : `Zone ${zonesNow.length + 1}`,
