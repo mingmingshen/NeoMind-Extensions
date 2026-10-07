@@ -257,14 +257,11 @@ jobs:
           echo "Building version: $(cat VERSION)"
         shell: bash
 
-      # Run the workspace unit tests before packaging (vision-common's pure
-      # logic + vision-hub's pipeline/command tests run on every platform;
-      # ORT-dependent paths are #[ignore]d and run locally).
+      # Run the workspace unit tests before packaging.
       - name: Run unit tests
         if: runner.os != 'Windows'
         run: |
-          cargo test -p vision-common --features engine-ort --lib
-          cargo test -p vision-hub --lib
+          cargo test --workspace --lib
         shell: bash
 
       - name: Build extensions

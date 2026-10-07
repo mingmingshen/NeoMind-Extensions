@@ -1,9 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    # Shared runtime crate for vision extensions (NOT an extension itself;
-    # release scripts glob extensions/ so keep shared crates under crates/)
-    "crates/vision-common",
     # Extensions targeting the isolated NeoMind runtime protocol
     "extensions/weather-forecast",
     "extensions/image-analyzer",
@@ -31,7 +28,6 @@ members = [
     "extensions/paddle-ocr-vl",
     "extensions/deepstream",
     "extensions/gym-tracker",
-    "extensions/vision-hub",
     # "extensions/final-test",
     # "extensions/cli-test-ext",
 ]
@@ -46,6 +42,7 @@ authors = ["NeoMind"]
 license = "MIT"
 
 [workspace.dependencies]
+ndarray = "0.16"
 # Minimal dependencies for WASM extensions
 serde = { version = "1.0", features = ["derive"] }
 # IMPORTANT: preserve_order feature is required for ABI compatibility between
@@ -61,13 +58,9 @@ async-trait = "0.1"
 # Use load-dynamic: ORT is loaded at runtime from bundled dylib/so/dll
 ort = { version = "2.0.0-rc.10", default-features = false, features = ["half", "load-dynamic"] }
 
-ndarray = "0.16"
 
 neomind-extension-sdk = "0.7.1"
 
-# Shared vision runtime (hardware accel abstraction, direct-ort engine,
-# model wrappers, image IO, model manager) — consumed by vision extensions.
-vision-common = { path = "crates/vision-common" }
 
 # Patch usls to skip unreliable is_available() check for CUDA EP.
 # When ORT is loaded dynamically (load-dynamic), GetAvailableProviders()

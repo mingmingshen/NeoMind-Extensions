@@ -193,7 +193,6 @@ V2_EXTENSIONS=(
     "paddle-ocr-vl"
     "deepstream"
     "gym-tracker"
-    "vision-hub"
 )
 
 # Filter to single extension if specified
@@ -484,7 +483,7 @@ if [ "$SKIP_PACKAGE" = false ] && [ "$BUILD_TYPE" = "release" ]; then
                     NEOMIND_EXT_DIR="$HOME/Library/Application Support/com.neomind.neomind/data/extensions"
                     FALLBACK=""
                     if [ -d "$NEOMIND_EXT_DIR" ]; then
-                        for cand in vision-hub ocr-device-inference yolo-device-inference image-analyzer yolo-video; do
+                        for cand in ocr-device-inference yolo-device-inference image-analyzer yolo-video; do
                             cand_lib="$NEOMIND_EXT_DIR/$cand/binaries/$PLATFORM/libonnxruntime.dylib"
                             if [ -f "$cand_lib" ]; then
                                 cand_minor=$(otool -L "$cand_lib" 2>/dev/null | grep -oE 'current version [0-9]+\.[0-9]+' | head -1 | awk '{print $3}' | cut -d. -f2)
