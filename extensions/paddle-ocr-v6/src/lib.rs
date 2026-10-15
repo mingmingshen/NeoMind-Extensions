@@ -20,8 +20,8 @@ use std::io::Read;
 
 use async_trait::async_trait;
 use neomind_extension_sdk::{
-    Extension, ExtensionCommand, ExtensionError, ExtensionMetadata, MetricDataType,
-    MetricDescriptor, MetricValue, ParameterDefinition, Result,
+    Extension, ExtensionCommand, ExtensionError, ExtensionMetadata, ExtensionMetricValue,
+    MetricDataType, MetricDescriptor, MetricValue, ParameterDefinition, Result,
 };
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -685,6 +685,22 @@ impl Extension for PaddleOcrV6Extension {
             MetricDescriptor::new("loaded", "Models Loaded", MetricDataType::Boolean),
             MetricDescriptor::new("tier", "Active Tier", MetricDataType::String),
         ]
+    }
+
+    fn produce_metrics(&self) -> Result<Vec<ExtensionMetricValue>> {
+        // The two declared metrics are exactly what the `health` command
+        // reports. Declaring them without producing values made the
+        // platform's broken-IPC detector fire forever — a reload can't fix
+        // an unimplemented method, so the self-heal loop hit its give-up
+        // cap on every boot (observed 2026-10-14 on an NG4520).
+        let engine = self.engine.read();
+        Ok(vec![
+            ExtensionMetricValue::new("loaded", MetricValue::Boolean(engine.loaded)),
+            ExtensionMetricValue::new(
+                "tier",
+                MetricValue::String(engine.tier.as_str().to_string()),
+            ),
+        ])
     }
 
     async fn execute_command(
