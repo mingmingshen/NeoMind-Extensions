@@ -70,16 +70,29 @@ pub fn push_diag() -> &'static PushDiag {
 
 pub use std::sync::atomic::Ordering as AtomicOrd;
 
+/// How long the last face-bearing frame's boxes stay authoritative after
+/// the producer stops sending faces. gym-native runs SCRFD every Nth
+/// frame (~0.75 s at 20 fps) and publishes an EMPTY `faces` array on the
+/// frames in between — the producer contract (Python parity, documented
+/// on `FaceBox`) reuses detections in between, so a plain overwrite
+/// blanked the overlay mosaic 14 frames out of 15. 1.5 s covers two
+/// healthy SCRFD cycles while bounding how stale a face bbox may get —
+/// `identity::tightest_containing` anchors a face to a track by bbox
+/// containment, so an unbounded linger would misattribute identity when
+/// the person walks away.
+const FACE_RETAIN: Duration = Duration::from_millis(1500);
+
 pub struct LiveState {
     ttl: Duration,
+    face_retain: Duration,
     /// A track absent from the latest frame survives this long before
     /// being pruned (device tracker drops tracks after ~3 s without a
     /// detection and stops publishing them immediately).
     refresh_grace: Duration,
     inner: RwLock<HashMap<i64, Entry>>,
-    /// Latest frame-level face boxes (P2). Refreshed per frame; faces are
-    /// detected every Nth frame on the device and reused in between, so a
-    /// plain last-value cache matches the producer's own semantics.
+    /// Latest frame-level face boxes (P2). Faces are detected every Nth
+    /// frame on the device; keep-last with `FACE_RETAIN` (see there)
+    /// matches the producer's documented reuse-in-between semantics.
     faces: RwLock<Vec<FaceBox>>,
     faces_seen: RwLock<Instant>,
     /// Latest producer frame preview (base64 JPEG) + the tracks OF THAT
@@ -114,6 +127,7 @@ impl LiveState {
     pub fn new(ttl_sec: u32) -> Self {
         Self {
             ttl: Duration::from_secs(ttl_sec as u64),
+            face_retain: FACE_RETAIN,
             refresh_grace: Duration::from_millis(2500),
             inner: Default::default(),
             faces: Default::default(),
@@ -126,6 +140,16 @@ impl LiveState {
             preview_cv: Condvar::new(),
             track_hist: Default::default(),
             faces_seen: RwLock::new(Instant::now() - Duration::from_secs(3600)),
+        }
+    }
+
+    /// Test-only: `new` with a shrunken face-retention window so expiry
+    /// paths are testable without real sleeps.
+    #[cfg(test)]
+    fn with_face_retain(ttl_sec: u32, face_retain: Duration) -> Self {
+        Self {
+            face_retain,
+            ..Self::new(ttl_sec)
         }
     }
 
@@ -197,11 +221,18 @@ impl LiveState {
             g.retain(|_, e| now.duration_since(e.last_seen) < grace);
         }
         let tracks_now: Vec<Track> = f.tracks.clone();
-        *self.faces.write() = f.faces.clone();
-        *self.faces_seen.write() = now;
+        // keep-last (see FACE_RETAIN): a face set arrives only on the
+        // SCRFD frame; empty intermediate frames must not blank it.
+        if !f.faces.is_empty() {
+            *self.faces.write() = f.faces.clone();
+            *self.faces_seen.write() = now;
+        } else if now.duration_since(*self.faces_seen.read()) > self.face_retain {
+            *self.faces.write() = Vec::new();
+        }
         *self.tracks_ts.write() = f.ts_ns;
         if let Some(img) = f.img_b64.as_ref() {
-            *self.frame_img.write() = Some((img.clone(), tracks_now, f.faces.clone()));
+            let faces_eff = self.faces.read().clone();
+            *self.frame_img.write() = Some((img.clone(), tracks_now, faces_eff));
         }
         // ts-keyed history for timestamp-exact overlay interpolation
         {
@@ -378,12 +409,12 @@ impl LiveState {
             .collect()
     }
 
-    /// Latest frame-level face boxes, `None` when the last face-bearing
-    /// payload is older than the track TTL (producer stopped sending —
-    /// don't mosaic against stale geometry).
+    /// Latest frame-level face boxes, `None` when no face-bearing payload
+    /// arrived within `FACE_RETAIN` (producer stopped sending — don't
+    /// mosaic against stale geometry).
     pub fn snapshot_faces(&self) -> Option<Vec<FaceBox>> {
         let seen = *self.faces_seen.read();
-        if seen.elapsed() > self.ttl {
+        if seen.elapsed() > self.face_retain {
             return None;
         }
         Some(self.faces.read().clone())
@@ -507,10 +538,10 @@ mod tests {
     fn faces_mirror_and_ttl() {
         use crate::types::FaceBox;
         let s = LiveState::new(3600);
-        // Empty producer frames (no faces field / detector off) mirror as
-        // an empty-but-fresh list.
+        // No face-bearing frame within FACE_RETAIN yet -> None (the
+        // frontend's unwrap_or_default renders zero mosaics).
         s.apply_frame(&frame(1));
-        assert_eq!(s.snapshot_faces(), Some(vec![]));
+        assert_eq!(s.snapshot_faces(), None);
 
         let mut f = frame(2);
         f.faces = vec![FaceBox {
@@ -526,8 +557,22 @@ mod tests {
         s.apply_frame(&f);
         assert_eq!(s.snapshot_faces().unwrap().len(), 1);
 
-        // ttl 0 -> any age exceeds it -> stale faces drop to None.
-        let old = LiveState::new(0);
+        // gym-native publishes faces ONLY on the SCRFD frame (every Nth):
+        // the empty intermediate frames must not blank the kept set —
+        // that 1-in-N flicker is exactly the vanished-mosaic regression.
+        let mut empty = frame(3);
+        empty.faces = vec![];
+        s.apply_frame(&empty);
+        s.apply_frame(&empty);
+        assert_eq!(
+            s.snapshot_faces().unwrap().len(),
+            1,
+            "empty intermediate frames keep the last face set"
+        );
+
+        // expiry: no face-bearing frame within the retain window ->
+        // faces drop to None (stale geometry must not linger).
+        let old = LiveState::with_face_retain(0, Duration::from_millis(1));
         old.apply_frame(&f);
         std::thread::sleep(std::time::Duration::from_millis(5));
         assert_eq!(old.snapshot_faces(), None);
